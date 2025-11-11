@@ -95,9 +95,9 @@ void trace_loop(t_tracer *tracer)
 					tracer->in_syscall = 0;
 				}
 			} else if (sig == SIGTRAP) {
-				// SIGTRAP normal
+				// SIGTRAP normal - continuer sans relayer le signal
 			} else {
-				// Autre signal
+				// Autre signal - le relayer au processus tracé
 				if (!tracer->option_c) {
 					print_signal(tracer->child_pid, sig);
 				}
@@ -116,6 +116,7 @@ int start_trace(char **argv, char **envp, int option_c)
 	t_tracer tracer;
 	int status;
 	char *path_resolved = NULL;
+	int pipefd[2];
 
 	memset(&tracer, 0, sizeof(tracer));
 	tracer.option_c = option_c;
@@ -132,29 +133,52 @@ int start_trace(char **argv, char **envp, int option_c)
 		init_stats(&tracer);
 	}
 
-	tracer.child_pid = fork();
-	if (tracer.child_pid == -1) {
-		perror("fork");
+	// Créer un pipe pour synchroniser parent et enfant
+	if (pipe(pipefd) == -1) {
+		perror("pipe");
 		if (path_resolved)
 			free(path_resolved);
 		return 1;
 	}
 
+	tracer.child_pid = fork();
+	if (tracer.child_pid == -1) {
+		perror("fork");
+		if (path_resolved)
+			free(path_resolved);
+		close(pipefd[0]);
+		close(pipefd[1]);
+		return 1;
+	}
+
 	if (tracer.child_pid == 0) {
-		// Processus enfant - exécuter directement
-		// Le parent nous attachera avec PTRACE_SEIZE
+		// Processus enfant
+		char dummy;
+
+		close(pipefd[1]); // Fermer le côté écriture
+
+		// Attendre que le parent soit prêt (bloque sur read)
+		if (read(pipefd[0], &dummy, 1) == -1){
+			perror("read pipe");
+			exit(1);
+		}
+		close(pipefd[0]);
+
+		// Maintenant execve
 		execve(argv[0], argv, envp);
 		perror(argv[0]);
 		exit(1);
 	}
 
 	// Processus parent
-	// Attacher avec PTRACE_SEIZE avant que l'enfant n'appelle execve
-	usleep(1000); // Petit délai pour laisser l'enfant commencer
+	close(pipefd[0]); // Fermer le côté lecture
 
+	// Attacher avec PTRACE_SEIZE AVANT que l'enfant n'appelle execve
 	if (ptrace(PTRACE_SEIZE, tracer.child_pid, NULL,
 	           PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) == -1) {
 		perror("ptrace SEIZE");
+		close(pipefd[1]);
+		kill(tracer.child_pid, SIGKILL);
 		if (path_resolved)
 			free(path_resolved);
 		return 1;
@@ -163,6 +187,8 @@ int start_trace(char **argv, char **envp, int option_c)
 	// Interrompre le processus pour le synchroniser
 	if (ptrace(PTRACE_INTERRUPT, tracer.child_pid, NULL, NULL) == -1) {
 		perror("ptrace INTERRUPT");
+		close(pipefd[1]);
+		kill(tracer.child_pid, SIGKILL);
 		if (path_resolved)
 			free(path_resolved);
 		return 1;
@@ -171,6 +197,8 @@ int start_trace(char **argv, char **envp, int option_c)
 	// Attendre l'arrêt
 	if (waitpid(tracer.child_pid, &status, 0) == -1) {
 		perror("waitpid");
+		close(pipefd[1]);
+		kill(tracer.child_pid, SIGKILL);
 		if (path_resolved)
 			free(path_resolved);
 		return 1;
@@ -178,6 +206,8 @@ int start_trace(char **argv, char **envp, int option_c)
 
 	if (!WIFSTOPPED(status)) {
 		fprintf(stderr, "Child not stopped\n");
+		close(pipefd[1]);
+		kill(tracer.child_pid, SIGKILL);
 		if (path_resolved)
 			free(path_resolved);
 		return 1;
@@ -186,6 +216,8 @@ int start_trace(char **argv, char **envp, int option_c)
 	// Détecter l'architecture
 	tracer.is_64bit = detect_architecture(tracer.child_pid);
 	if (tracer.is_64bit == -1) {
+		close(pipefd[1]);
+		kill(tracer.child_pid, SIGKILL);
 		if (path_resolved)
 			free(path_resolved);
 		return 1;
@@ -195,12 +227,18 @@ int start_trace(char **argv, char **envp, int option_c)
 	if (ptrace(PTRACE_SETOPTIONS, tracer.child_pid, NULL,
 			   PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) == -1) {
 		perror("ptrace SETOPTIONS");
+		close(pipefd[1]);
+		kill(tracer.child_pid, SIGKILL);
 		if (path_resolved)
 			free(path_resolved);
 		return 1;
 	}
 
-	// Démarrer le traçage
+	// Débloquer l'enfant pour qu'il puisse faire execve
+	close(pipefd[1]);
+
+	// Démarrer le traçage immédiatement (pas besoin de waitpid supplémentaire)
+	// Le premier PTRACE_SYSCALL dans trace_loop va reprendre l'exécution
 	trace_loop(&tracer);
 
 	// Afficher les statistiques si option -c
