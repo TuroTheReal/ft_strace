@@ -1,6 +1,5 @@
 #include "ft_strace.h"
 
-// 32 ou 64 ?
 int detect_architecture(pid_t pid)
 {
 	struct iovec iov;
@@ -9,13 +8,11 @@ int detect_architecture(pid_t pid)
 	iov.iov_base = &regs;
 	iov.iov_len = sizeof(regs);
 
-	// PTRACE_GETREGSET récupère les registres
 	if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov) == -1) {
 		perror("ptrace GETREGSET");
 		return -1;
 	}
 
-	// Si taille == full struct --> 64-bit, sinon 32
 	return (iov.iov_len == sizeof(struct user_regs_struct)) ? 1 : 0;
 }
 
@@ -25,45 +22,38 @@ void trace_loop(t_tracer *tracer)
 	t_syscall_info info;
 	struct iovec iov;
 
-	// Configuration pour récupérer les registres
 	iov.iov_base = &tracer->regs;
 	iov.iov_len = sizeof(tracer->regs);
 
 	while (1) {
-		// PTRACE_SYSCALL : continue jusqu'au prochain syscall
-		// Le processus s'arrête à l'ENTRÉE et à la SORTIE de chaque syscall
 		if (ptrace(PTRACE_SYSCALL, tracer->child_pid, NULL, NULL) == -1) {
 			perror("ptrace SYSCALL");
 			break;
 		}
 
-		// wait proces to stop
 		if (waitpid(tracer->child_pid, &status, 0) == -1) {
 			perror("waitpid");
 			break;
 		}
 
-		// process ended
 		if (WIFEXITED(status)) {
-			fprintf(stderr, "+++ exited with %d +++\n", WEXITSTATUS(status));
+			if (!tracer->option_c) {
+				fprintf(stderr, "+++ exited with %d +++\n", WEXITSTATUS(status));
+			}
 			break;
 		}
 
-		// process killed
 		if (WIFSIGNALED(status)) {
-			fprintf(stderr, "+++ killed by signal %d +++\n", WTERMSIG(status));
+			if (!tracer->option_c) {
+				fprintf(stderr, "+++ killed by signal %d +++\n", WTERMSIG(status));
+			}
 			break;
 		}
 
-		// process stopped
 		if (WIFSTOPPED(status)) {
 			int sig = WSTOPSIG(status);
 
-			// Le bit indique un syscall-stop grâce à PTRACE_O_TRACESYSGOOD
 			if (sig == (SIGTRAP | 0x80)) {
-				// arrêt dû à un syscall
-
-				// Récupérer les registres
 				if (ptrace(PTRACE_GETREGSET, tracer->child_pid,
 						  NT_PRSTATUS, &iov) == -1) {
 					perror("ptrace GETREGSET");
@@ -71,94 +61,133 @@ void trace_loop(t_tracer *tracer)
 				}
 
 				if (!tracer->in_syscall) {
-					// *** ENTRÉE du syscall ***
+					// ENTRÉE du syscall
 					memset(&info, 0, sizeof(info));
 					info.is_64bit = tracer->is_64bit;
-
-					//Get syscall info & print
 					get_syscall_info(tracer, &info);
-					print_syscall_enter(&info);
 
+					// Enregistrer le temps de début
+					gettimeofday(&info.start_time, NULL);
+
+					if (!tracer->option_c) {
+						print_syscall_enter(&info);
+					}
+
+					// Sauvegarder pour option -c
+					tracer->current_syscall = info;
 					tracer->in_syscall = 1;
 				} else {
-					// *** SORTIE du syscall ***
+					// SORTIE du syscall
 					memset(&info, 0, sizeof(info));
 					info.is_64bit = tracer->is_64bit;
+					info.number = tracer->current_syscall.number;
+					info.name = tracer->current_syscall.name;
+					info.start_time = tracer->current_syscall.start_time;
 
-					// Get return value & print
 					get_syscall_retval(tracer, &info);
-					print_syscall_exit(&info);
+
+					// Enregistrer le temps de fin
+					gettimeofday(&info.end_time, NULL);
+
+					if (!tracer->option_c) {
+						print_syscall_exit(&info);
+					} else {
+						update_stats(tracer, &info);
+					}
 
 					tracer->in_syscall = 0;
 				}
 			} else {
-				//  vrai signal
-				print_signal(tracer->child_pid, sig);
-
-				// IMPORTANT : Transmettre le signal au processus tracé
-				// Sinon le signal est "mangé" par ptrace
-				if (ptrace(PTRACE_SYSCALL, tracer->child_pid, NULL, sig) == -1) {
-					perror("ptrace SYSCALL with signal");
-					break;
+				// Signal réel
+				if (!tracer->option_c) {
+					print_signal(tracer->child_pid, sig);
 				}
 			}
 		}
 	}
 }
 
-
-// Fork le processus et lance la boucle de traçage
-int start_trace(char **argv, char **envp)
+int start_trace(char **argv, char **envp, int option_c)
 {
 	t_tracer tracer;
 	int status;
+	char *path_resolved = NULL;
 
 	memset(&tracer, 0, sizeof(tracer));
+	tracer.option_c = option_c;
+
+	// Gestion du PATH (bonus)
+	if (argv[0][0] != '/' && argv[0][0] != '.') {
+		path_resolved = find_in_path(argv[0]);
+		if (path_resolved) {
+			argv[0] = path_resolved;
+		}
+	}
+
+	// Initialiser les stats pour option -c
+	if (option_c) {
+		init_stats(&tracer);
+	}
 
 	tracer.child_pid = fork();
 	if (tracer.child_pid == -1) {
 		perror("fork");
+		if (path_resolved)
+			free(path_resolved);
 		return 1;
 	}
 
 	if (tracer.child_pid == 0) {
-		// *** PROCESSUS ENFANT ***
-
-		// PTRACE_TRACEME : indique que ce processus veut être tracé
-		// Dès qu'on fera execve, le parent pourra nous tracer
+		// PROCESSUS ENFANT
 		if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) == -1) {
 			perror("ptrace TRACEME");
 			exit(1);
 		}
-
 		execve(argv[0], argv, envp);
 		perror(argv[0]);
 		exit(1);
 	}
 
-	// *** PROCESSUS PARENT (le traceur) ***
-	// Attendre que l'enfant soit prêt (arrêté après execve)
+	// PROCESSUS PARENT
 	if (waitpid(tracer.child_pid, &status, 0) == -1) {
 		perror("waitpid");
+		if (path_resolved)
+			free(path_resolved);
 		return 1;
 	}
 
-	// 32 ou 64 bit
+	if (!WIFSTOPPED(status)) {
+		fprintf(stderr, "Child not stopped\n");
+		if (path_resolved)
+			free(path_resolved);
+		return 1;
+	}
+
 	tracer.is_64bit = detect_architecture(tracer.child_pid);
 	if (tracer.is_64bit == -1) {
+		if (path_resolved)
+			free(path_resolved);
 		return 1;
 	}
 
-	// PTRACE_SETOPTIONS : configurer les options de traçage
-	// PTRACE_O_TRACESYSGOOD : ajoute 0x80 à SIGTRAP pour les syscalls (syscalls vs vrais signaux)
-	// PTRACE_O_EXITKILL : tue l'enfant si le parent meurt
 	if (ptrace(PTRACE_SETOPTIONS, tracer.child_pid, NULL,
 			   PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) == -1) {
 		perror("ptrace SETOPTIONS");
+		if (path_resolved)
+			free(path_resolved);
 		return 1;
 	}
 
 	trace_loop(&tracer);
+
+	// Afficher les stats pour option -c
+	if (option_c) {
+		print_stats(&tracer);
+		free_stats(&tracer);
+	}
+
+	if (path_resolved)
+		free(path_resolved);
 
 	return 0;
 }

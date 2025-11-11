@@ -338,7 +338,7 @@ static const char *syscall_table_64[] = {
 
 const char *get_syscall_name_64(long number)
 {
-	if (number < 0 || number >= SYSCALL_TABLE_64_SIZE)
+	if (number < 0 || number >= (long int)SYSCALL_TABLE_64_SIZE)
 		return NULL;
 
 	return syscall_table_64[number];

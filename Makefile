@@ -18,8 +18,7 @@ BONUS_FOLD = bonus/
 HEADER_FOLD = header/
 HEADER_SRC = ft_strace
 
-C_SRC =
-#  main parse print socket resolve signal strace
+C_SRC = main stats print syscall_info syscalls_32 syscalls_64 tracer path
 
 # C_SRC_BONUS = main parse print socket resolve signal strace
 

@@ -6,49 +6,65 @@
 # include <sys/wait.h>
 # include <sys/user.h>
 # include <sys/reg.h>
-# include <sys/syscall.h>
+# include <sys/uio.h>
 # include <unistd.h>
 # include <stdio.h>
 # include <stdlib.h>
 # include <string.h>
-# include <errno.h>
 # include <signal.h>
+# include <errno.h>
 # include <elf.h>
-# include <sys/uio.h>
+# include <time.h>
+# include <sys/time.h>
 
-// Syscalls
+# ifndef NT_PRSTATUS
+#  define NT_PRSTATUS 1
+# endif
+
 typedef struct s_syscall_info {
-	long number;			// Numéro du syscall
-	const char *name;		// Nom du syscall
-	long args[6];			// Arguments (max 6)
-	long ret_val;			// Valeur de retour
-	int is_64bit;			// 1 si 64-bit, 0 si 32-bit
+    long number;
+    const char *name;
+    unsigned long long args[6];
+    long long ret_val;
+    int is_64bit;
+    struct timeval start_time;
+    struct timeval end_time;
 } t_syscall_info;
 
-// Traceur
+typedef struct s_syscall_stats {
+    const char *name;
+    long count;
+    double total_time;
+    long errors;
+} t_syscall_stats;
+
 typedef struct s_tracer {
-	pid_t child_pid;			// PID du processus tracé
-	int in_syscall;				// 0 = entrée, 1 = sortie
-	int is_64bit;					// Architecture détectée
-	struct user_regs_struct regs;	// Registres du processus
+    pid_t child_pid;
+    struct user_regs_struct regs;
+    int is_64bit;
+    int in_syscall;
+    int option_c;
+    t_syscall_stats *stats;
+    int stats_count;
+    int stats_capacity;
+    t_syscall_info current_syscall;
 } t_tracer;
 
-int		main(int argc, char **argv, char **envp);
-void	print_usage(void);
-
-int		start_trace(char **argv, char **envp);
-void	trace_loop(t_tracer *tracer);
-int		detect_architecture(pid_t pid);
-
-void	get_syscall_info(t_tracer *tracer, t_syscall_info *info);
-void	get_syscall_args(t_tracer *tracer, t_syscall_info *info);
-void	get_syscall_retval(t_tracer *tracer, t_syscall_info *info);
-
-void	print_syscall_enter(t_syscall_info *info);
-void	print_syscall_exit(t_syscall_info *info);
-void	print_signal(pid_t pid, int sig);
-
+// Prototypes
+int start_trace(char **argv, char **envp, int option_c);
+void trace_loop(t_tracer *tracer);
+int detect_architecture(pid_t pid);
+void get_syscall_info(t_tracer *tracer, t_syscall_info *info);
+void get_syscall_retval(t_tracer *tracer, t_syscall_info *info);
+void print_syscall_enter(t_syscall_info *info);
+void print_syscall_exit(t_syscall_info *info);
+void print_signal(pid_t pid, int sig);
 const char *get_syscall_name_64(long number);
 const char *get_syscall_name_32(long number);
+void init_stats(t_tracer *tracer);
+void update_stats(t_tracer *tracer, t_syscall_info *info);
+void print_stats(t_tracer *tracer);
+void free_stats(t_tracer *tracer);
+char *find_in_path(const char *cmd);
 
 #endif
