@@ -29,7 +29,7 @@ typedef struct s_syscall_info {
     int is_64bit;
     struct timeval start_time;
     struct timeval end_time;
-    int arg_count;  // Nombre d'arguments réels du syscall
+    int arg_count;
 } t_syscall_info;
 
 typedef struct s_syscall_stats {
@@ -57,7 +57,7 @@ void trace_loop(t_tracer *tracer);
 int detect_architecture(pid_t pid);
 void get_syscall_info(t_tracer *tracer, t_syscall_info *info);
 void get_syscall_retval(t_tracer *tracer, t_syscall_info *info);
-void print_syscall_enter(t_syscall_info *info);
+void print_syscall_enter(t_syscall_info *info, pid_t pid);
 void print_syscall_exit(t_syscall_info *info);
 void print_signal(pid_t pid, int sig);
 const char *get_syscall_name_64(long number);
@@ -68,6 +68,5 @@ void update_stats(t_tracer *tracer, t_syscall_info *info);
 void print_stats(t_tracer *tracer);
 void free_stats(t_tracer *tracer);
 char *find_in_path(const char *cmd);
-void print_string_arg(pid_t pid, unsigned long long addr);
 
 #endif
