@@ -7,6 +7,9 @@ static void print_string_arg(pid_t pid, unsigned long long addr, int max_len)
 	int i;
 	long data;
 
+	// FIX: Initialiser le buffer pour éviter les valeurs non initialisées
+	memset(buffer, 0, sizeof(buffer));
+
 	if (addr == 0) {
 		printf("NULL");
 		return;
@@ -240,6 +243,9 @@ void print_syscall_enter(t_syscall_info *info, pid_t pid)
 
 void print_syscall_exit(t_syscall_info *info)
 {
+	long num = info->number;
+	int is_64 = info->is_64bit;
+
 	printf(") = ");
 
 	if (info->ret_val < 0 && info->ret_val >= -4095) {
@@ -247,7 +253,13 @@ void print_syscall_exit(t_syscall_info *info)
 	} else if (info->ret_val == 0) {
 		printf("0");
 	} else {
-		printf("%#lx", (unsigned long)info->ret_val);
+		// Syscalls qui retournent des valeurs décimales
+		if ((is_64 && (num == 0 || num == 1 || num == 3)) ||  // read, write, close
+		    (!is_64 && (num == 3 || num == 4 || num == 6))) { // read, write, close (32-bit)
+			printf("%lld", info->ret_val);
+		} else {
+			printf("%#lx", (unsigned long)info->ret_val);
+		}
 	}
 
 	printf("\n");

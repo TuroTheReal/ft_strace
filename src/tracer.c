@@ -13,8 +13,6 @@ int detect_architecture(pid_t pid)
 		return -1;
 	}
 
-	// Si iov_len == sizeof(struct user_regs_struct), c'est du 64-bit
-	// Sinon c'est du 32-bit
 	return (iov.iov_len == sizeof(struct user_regs_struct)) ? 1 : 0;
 }
 
@@ -56,7 +54,6 @@ void trace_loop(t_tracer *tracer)
 		if (WIFSTOPPED(status)) {
 			int sig = WSTOPSIG(status);
 
-			// Signal de syscall (SIGTRAP avec bit 0x80)
 			if (sig == (SIGTRAP | 0x80)) {
 				if (ptrace(PTRACE_GETREGSET, tracer->child_pid,
 						  NT_PRSTATUS, &iov) == -1) {
@@ -65,7 +62,7 @@ void trace_loop(t_tracer *tracer)
 				}
 
 				if (!tracer->in_syscall) {
-					// EntrÃ©e dans le syscall
+					// Entrée dans le syscall
 					memset(&info, 0, sizeof(info));
 					info.is_64bit = tracer->is_64bit;
 					get_syscall_info(tracer, &info);
@@ -98,19 +95,17 @@ void trace_loop(t_tracer *tracer)
 					tracer->in_syscall = 0;
 				}
 			} else if (sig == SIGTRAP) {
-				// SIGTRAP normal (peut arriver au dÃ©marrage)
-				// On continue simplement
+				// SIGTRAP normal
 			} else {
 				// Autre signal
 				if (!tracer->option_c) {
 					print_signal(tracer->child_pid, sig);
 				}
-				// Retransmettre le signal au processus tracÃ©
 				if (ptrace(PTRACE_SYSCALL, tracer->child_pid, NULL, sig) == -1) {
 					perror("ptrace SYSCALL with signal");
 					break;
 				}
-				continue; // Ãviter le ptrace au dÃ©but de la boucle
+				continue;
 			}
 		}
 	}
@@ -146,21 +141,34 @@ int start_trace(char **argv, char **envp, int option_c)
 	}
 
 	if (tracer.child_pid == 0) {
-		// Processus enfant
-		// Utiliser PTRACE_TRACEME pour permettre au parent de nous tracer
-		if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) == -1) {
-			perror("ptrace TRACEME");
-			exit(1);
-		}
-
-		// ExÃ©cuter le programme
+		// Processus enfant - exécuter directement
+		// Le parent nous attachera avec PTRACE_SEIZE
 		execve(argv[0], argv, envp);
 		perror(argv[0]);
 		exit(1);
 	}
 
 	// Processus parent
-	// Attendre que l'enfant se mette en pause aprÃ¨s PTRACE_TRACEME
+	// Attacher avec PTRACE_SEIZE avant que l'enfant n'appelle execve
+	usleep(1000); // Petit délai pour laisser l'enfant commencer
+
+	if (ptrace(PTRACE_SEIZE, tracer.child_pid, NULL,
+	           PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) == -1) {
+		perror("ptrace SEIZE");
+		if (path_resolved)
+			free(path_resolved);
+		return 1;
+	}
+
+	// Interrompre le processus pour le synchroniser
+	if (ptrace(PTRACE_INTERRUPT, tracer.child_pid, NULL, NULL) == -1) {
+		perror("ptrace INTERRUPT");
+		if (path_resolved)
+			free(path_resolved);
+		return 1;
+	}
+
+	// Attendre l'arrêt
 	if (waitpid(tracer.child_pid, &status, 0) == -1) {
 		perror("waitpid");
 		if (path_resolved)
@@ -168,7 +176,6 @@ int start_trace(char **argv, char **envp, int option_c)
 		return 1;
 	}
 
-	// VÃ©rifier que l'enfant est bien arrÃªtÃ©
 	if (!WIFSTOPPED(status)) {
 		fprintf(stderr, "Child not stopped\n");
 		if (path_resolved)
@@ -176,7 +183,7 @@ int start_trace(char **argv, char **envp, int option_c)
 		return 1;
 	}
 
-	// DÃ©tecter l'architecture
+	// Détecter l'architecture
 	tracer.is_64bit = detect_architecture(tracer.child_pid);
 	if (tracer.is_64bit == -1) {
 		if (path_resolved)
@@ -185,8 +192,6 @@ int start_trace(char **argv, char **envp, int option_c)
 	}
 
 	// Configurer les options de ptrace
-	// PTRACE_O_TRACESYSGOOD : fait en sorte que SIGTRAP pour syscall = SIGTRAP | 0x80
-	// PTRACE_O_EXITKILL : tue l'enfant si le parent meurt
 	if (ptrace(PTRACE_SETOPTIONS, tracer.child_pid, NULL,
 			   PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) == -1) {
 		perror("ptrace SETOPTIONS");
@@ -195,7 +200,7 @@ int start_trace(char **argv, char **envp, int option_c)
 		return 1;
 	}
 
-	// DÃ©marrer le traÃ§age
+	// Démarrer le traçage
 	trace_loop(&tracer);
 
 	// Afficher les statistiques si option -c
