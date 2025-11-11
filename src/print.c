@@ -10,10 +10,17 @@ void print_syscall_enter(t_syscall_info *info)
 		printf("%s(", info->name);
 	}
 
-	for (i = 0; i < 6; i++) {
+	// N'afficher que le nombre d'arguments réels
+	for (i = 0; i < info->arg_count; i++) {
 		if (i > 0)
 			printf(", ");
-		printf("%#llx", info->args[i]);
+
+		// Afficher NULL pour les pointeurs null
+		if (info->args[i] == 0) {
+			printf("NULL");
+		} else {
+			printf("%#llx", info->args[i]);
+		}
 	}
 
 	fflush(stdout);
@@ -26,7 +33,7 @@ void print_syscall_exit(t_syscall_info *info)
 	if (info->ret_val < 0 && info->ret_val >= -4095) {
 		printf("-1 (errno %lld)", -info->ret_val);
 	} else {
-		printf("%lld", info->ret_val);
+		printf("%#lx", (unsigned long)info->ret_val);
 	}
 
 	printf("\n");

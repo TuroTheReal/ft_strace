@@ -38,7 +38,7 @@ void trace_loop(t_tracer *tracer)
 
 		if (WIFEXITED(status)) {
 			if (!tracer->option_c) {
-				fprintf(stderr, "+++ exited with %d +++\n", WEXITSTATUS(status));
+				fprintf(stderr, "\n+++ exited with %d +++\n", WEXITSTATUS(status));
 			}
 			break;
 		}
@@ -61,32 +61,26 @@ void trace_loop(t_tracer *tracer)
 				}
 
 				if (!tracer->in_syscall) {
-					// ENTRÉE du syscall
 					memset(&info, 0, sizeof(info));
 					info.is_64bit = tracer->is_64bit;
 					get_syscall_info(tracer, &info);
-
-					// Enregistrer le temps de début
 					gettimeofday(&info.start_time, NULL);
 
 					if (!tracer->option_c) {
 						print_syscall_enter(&info);
 					}
 
-					// Sauvegarder pour option -c
 					tracer->current_syscall = info;
 					tracer->in_syscall = 1;
 				} else {
-					// SORTIE du syscall
 					memset(&info, 0, sizeof(info));
 					info.is_64bit = tracer->is_64bit;
 					info.number = tracer->current_syscall.number;
 					info.name = tracer->current_syscall.name;
 					info.start_time = tracer->current_syscall.start_time;
+					info.arg_count = tracer->current_syscall.arg_count;
 
 					get_syscall_retval(tracer, &info);
-
-					// Enregistrer le temps de fin
 					gettimeofday(&info.end_time, NULL);
 
 					if (!tracer->option_c) {
@@ -98,7 +92,6 @@ void trace_loop(t_tracer *tracer)
 					tracer->in_syscall = 0;
 				}
 			} else {
-				// Signal réel
 				if (!tracer->option_c) {
 					print_signal(tracer->child_pid, sig);
 				}
@@ -116,7 +109,6 @@ int start_trace(char **argv, char **envp, int option_c)
 	memset(&tracer, 0, sizeof(tracer));
 	tracer.option_c = option_c;
 
-	// Gestion du PATH (bonus)
 	if (argv[0][0] != '/' && argv[0][0] != '.') {
 		path_resolved = find_in_path(argv[0]);
 		if (path_resolved) {
@@ -124,7 +116,6 @@ int start_trace(char **argv, char **envp, int option_c)
 		}
 	}
 
-	// Initialiser les stats pour option -c
 	if (option_c) {
 		init_stats(&tracer);
 	}
@@ -138,7 +129,6 @@ int start_trace(char **argv, char **envp, int option_c)
 	}
 
 	if (tracer.child_pid == 0) {
-		// PROCESSUS ENFANT
 		if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) == -1) {
 			perror("ptrace TRACEME");
 			exit(1);
@@ -148,7 +138,6 @@ int start_trace(char **argv, char **envp, int option_c)
 		exit(1);
 	}
 
-	// PROCESSUS PARENT
 	if (waitpid(tracer.child_pid, &status, 0) == -1) {
 		perror("waitpid");
 		if (path_resolved)
@@ -180,7 +169,6 @@ int start_trace(char **argv, char **envp, int option_c)
 
 	trace_loop(&tracer);
 
-	// Afficher les stats pour option -c
 	if (option_c) {
 		print_stats(&tracer);
 		free_stats(&tracer);

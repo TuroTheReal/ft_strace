@@ -18,7 +18,6 @@ int main(int argc, char **argv, char **envp)
 		return 1;
 	}
 
-	// Parse option -c
 	if (strcmp(argv[1], "-c") == 0) {
 		option_c = 1;
 		arg_offset = 2;

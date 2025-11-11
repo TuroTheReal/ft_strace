@@ -13,11 +13,9 @@ void update_stats(t_tracer *tracer, t_syscall_info *info)
 	double elapsed;
 	const char *name = info->name ? info->name : "unknown";
 
-	// Calculer le temps écoulé en secondes
 	elapsed = (info->end_time.tv_sec - info->start_time.tv_sec) +
 			  (info->end_time.tv_usec - info->start_time.tv_usec) / 1000000.0;
 
-	// Chercher si le syscall existe déjà dans les stats
 	for (i = 0; i < tracer->stats_count; i++) {
 		if (strcmp(tracer->stats[i].name, name) == 0) {
 			tracer->stats[i].count++;
@@ -29,7 +27,6 @@ void update_stats(t_tracer *tracer, t_syscall_info *info)
 		}
 	}
 
-	// Nouveau syscall
 	if (tracer->stats_count >= tracer->stats_capacity) {
 		tracer->stats_capacity *= 2;
 		tracer->stats = realloc(tracer->stats,
@@ -49,7 +46,6 @@ int compare_stats(const void *a, const void *b)
 	const t_syscall_stats *sa = (const t_syscall_stats *)a;
 	const t_syscall_stats *sb = (const t_syscall_stats *)b;
 
-	// Trier par temps total décroissant
 	if (sb->total_time > sa->total_time)
 		return 1;
 	if (sb->total_time < sa->total_time)
@@ -64,21 +60,17 @@ void print_stats(t_tracer *tracer)
 	double total_time = 0;
 	long total_errors = 0;
 
-	// Trier les stats
 	qsort(tracer->stats, tracer->stats_count, sizeof(t_syscall_stats), compare_stats);
 
-	// Calculer les totaux
 	for (i = 0; i < tracer->stats_count; i++) {
 		total_calls += tracer->stats[i].count;
 		total_time += tracer->stats[i].total_time;
 		total_errors += tracer->stats[i].errors;
 	}
 
-	// Afficher le header
 	fprintf(stderr, "%% time     seconds  usecs/call     calls    errors syscall\n");
 	fprintf(stderr, "------ ----------- ----------- --------- --------- ----------------\n");
 
-	// Afficher chaque syscall
 	for (i = 0; i < tracer->stats_count; i++) {
 		double percent = (total_time > 0) ?
 						 (tracer->stats[i].total_time / total_time * 100) : 0;
@@ -100,7 +92,6 @@ void print_stats(t_tracer *tracer)
 		fprintf(stderr, "%s\n", tracer->stats[i].name);
 	}
 
-	// Ligne de total
 	fprintf(stderr, "------ ----------- ----------- --------- --------- ----------------\n");
 	fprintf(stderr, "100.00 %11.6f             %9ld %9ld total\n",
 			total_time, total_calls, total_errors);
