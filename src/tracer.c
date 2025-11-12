@@ -7,20 +7,16 @@ static void signal_handler(int sig)
 	(void)sig;
 
 	// Fermer le pipe si encore ouvert
-	if (g_cleanup.pipe_fd != -1) {
+	if (g_cleanup.pipe_fd != -1)
 		close(g_cleanup.pipe_fd);
-	}
 
 	// Tuer le processus enfant
-	if (g_cleanup.child_pid > 0) {
+	if (g_cleanup.child_pid > 0)
 		kill(g_cleanup.child_pid, SIGKILL);
-		waitpid(g_cleanup.child_pid, NULL, 0);
-	}
 
 	// Libérer la mémoire
-	if (g_cleanup.path_resolved) {
+	if (g_cleanup.path_resolved)
 		free(g_cleanup.path_resolved);
-	}
 
 	_exit(128 + sig);
 }
