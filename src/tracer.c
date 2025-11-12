@@ -84,7 +84,7 @@ void trace_loop(t_tracer *tracer)
 			break;
 		}
 
-		if (WIFSIGNALED(status)) { // endedd by signal
+		if (WIFSIGNALED(status)) { // ended by signal
 			// Si on était dans exit_group, fermer la parenthèse
 			if (tracer->in_syscall) {
 				long num = tracer->current_syscall.number;
