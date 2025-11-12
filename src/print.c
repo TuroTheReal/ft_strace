@@ -1,5 +1,24 @@
 #include "ft_strace.h"
 
+#define AT_FDCWD -100
+
+// Vérifier si le contenu est affichable
+static int is_printable_content(const char *buf, size_t len)
+{
+	size_t i;
+	size_t printable = 0;
+
+	if (len > 32) len = 32;  // Limiter la vérification
+
+	for (i = 0; i < len; i++) {
+		if ((buf[i] >= 32 && buf[i] < 127) || buf[i] == '\n' || buf[i] == '\t' || buf[i] == '\r') {
+			printable++;
+		}
+	}
+
+	return len > 0 && (printable * 100 / len) > 70;  // Si >70% printable
+}
+
 // Lire une chaîne depuis le processus tracé
 static void print_string_arg(pid_t pid, unsigned long long addr, int max_len)
 {
@@ -7,7 +26,6 @@ static void print_string_arg(pid_t pid, unsigned long long addr, int max_len)
 	int i;
 	long data;
 
-	// FIX: Initialiser le buffer pour éviter les valeurs non initialisées
 	memset(buffer, 0, sizeof(buffer));
 
 	if (addr == 0) {
@@ -24,15 +42,13 @@ static void print_string_arg(pid_t pid, unsigned long long addr, int max_len)
 			break;
 		}
 
-		// Copier les octets du long dans le buffer
 		memcpy(buffer + i, &data, sizeof(long));
 
-		// Vérifier s'il y a un null byte
 		int j;
 		for (j = 0; j < (int)sizeof(long) && i + j < 255; j++) {
 			if (buffer[i + j] == '\0') {
 				buffer[i + j] = '\0';
-				i = max_len; // Sortir de la boucle externe
+				i = max_len;
 				break;
 			}
 		}
@@ -67,25 +83,85 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 	long num = info->number;
 	int is_64 = info->is_64bit;
 
-	// Syscalls avec des arguments spécifiques à formater
-	if ((is_64 && num == 0) || (!is_64 && num == 3)) { // read
+	// exit_group - afficher l'argument en décimal
+	if ((is_64 && num == 231) || (!is_64 && num == 252)) {
+		printf("%d", (int)info->args[0]);
+		return;
+	}
+
+	// close - afficher le fd en décimal
+	if ((is_64 && num == 3) || (!is_64 && num == 6)) {
+		printf("%d", (int)info->args[0]);
+		return;
+	}
+
+	// read
+	if ((is_64 && num == 0) || (!is_64 && num == 3)) {
 		printf("%d, ", (int)info->args[0]);
 		printf("%#llx, ", info->args[1]);
 		printf("%llu", info->args[2]);
 		return;
 	}
 
-	if ((is_64 && num == 1) || (!is_64 && num == 4)) { // write
+	// write - essayer d'afficher le contenu
+	if ((is_64 && num == 1) || (!is_64 && num == 4)) {
 		printf("%d, ", (int)info->args[0]);
-		printf("%#llx, ", info->args[1]);
-		printf("%llu", info->args[2]);
+
+		unsigned long long addr = info->args[1];
+		unsigned long long size = info->args[2];
+
+		if (size > 0 && size <= 1024) {
+			char buffer[1025];
+			size_t to_read = size > 1024 ? 1024 : size;
+			size_t j;
+			int can_read = 1;
+
+			memset(buffer, 0, sizeof(buffer));
+
+			for (j = 0; j < to_read; j += sizeof(long)) {
+				errno = 0;
+				long data = ptrace(PTRACE_PEEKDATA, pid, addr + j, NULL);
+				if (errno != 0) {
+					can_read = 0;
+					break;
+				}
+				size_t copy_len = (to_read - j) < sizeof(long) ? (to_read - j) : sizeof(long);
+				memcpy(buffer + j, &data, copy_len);
+			}
+
+			if (can_read && is_printable_content(buffer, to_read)) {
+				printf("\"");
+				size_t display_len = to_read > 32 ? 32 : to_read;
+				for (j = 0; j < display_len; j++) {
+					if (buffer[j] >= 32 && buffer[j] < 127) {
+						putchar(buffer[j]);
+					} else if (buffer[j] == '\n') {
+						printf("\\n");
+					} else if (buffer[j] == '\t') {
+						printf("\\t");
+					} else if (buffer[j] == '\r') {
+						printf("\\r");
+					} else {
+						printf("\\x%02x", (unsigned char)buffer[j]);
+					}
+				}
+				if (to_read > 32) {
+					printf("...");
+				}
+				printf("\", %llu", size);
+			} else {
+				printf("%#llx, %llu", addr, size);
+			}
+		} else {
+			printf("%#llx, %llu", addr, size);
+		}
 		return;
 	}
 
-	if ((is_64 && num == 2) || (!is_64 && num == 5)) { // open
+	// open
+	if ((is_64 && num == 2) || (!is_64 && num == 5)) {
 		print_string_arg(pid, info->args[0], 32);
 		printf(", ");
-		// Flags
 		unsigned long flags = info->args[1];
 		if (flags & 0x40) printf("O_CREAT|");
 		if (flags & 0x200) printf("O_DIRECTORY|");
@@ -96,7 +172,8 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		return;
 	}
 
-	if ((is_64 && num == 21) || (!is_64 && num == 33)) { // access
+	// access
+	if ((is_64 && num == 21) || (!is_64 && num == 33)) {
 		print_string_arg(pid, info->args[0], 32);
 		printf(", ");
 		switch(info->args[1]) {
@@ -109,11 +186,18 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		return;
 	}
 
-	if (is_64 && num == 257) { // openat
-		printf("%d, ", (int)(long)info->args[0]);
+	// openat
+	if (is_64 && num == 257) {
+		// Traiter comme un int signé 32-bit
+		int fd = (int)info->args[0];
+
+		if (fd == -100) {
+			printf("AT_FDCWD, ");
+		} else {
+			printf("%d, ", fd);
+		}
 		print_string_arg(pid, info->args[1], 32);
 		printf(", ");
-		// Flags
 		unsigned long flags = info->args[2];
 		if (flags & 0x40) printf("O_CREAT|");
 		if (flags & 0x200) printf("O_DIRECTORY|");
@@ -127,20 +211,26 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		return;
 	}
 
-	if ((is_64 && num == 59) || (!is_64 && num == 11)) { // execve
+	// execve
+	if ((is_64 && num == 59) || (!is_64 && num == 11)) {
 		print_string_arg(pid, info->args[0], 32);
 		printf(", ");
-		// Pour argv et envp, on pourrait les lire mais c'est complexe
-		// On affiche juste les adresses
 		printf("%#llx, %#llx", info->args[1], info->args[2]);
 		return;
 	}
 
-	if (is_64 && num == 262) { // newfstatat
-		printf("%d, ", (int)(long)info->args[0]);
+	// newfstatat
+	if (is_64 && num == 262) {
+		// Traiter comme un int signé 32-bit
+		int fd = (int)info->args[0];
+
+		if (fd == -100) {
+			printf("AT_FDCWD, ");
+		} else {
+			printf("%d, ", fd);
+		}
 		print_string_arg(pid, info->args[1], 32);
 		printf(", %#llx, ", info->args[2]);
-		// Flags
 		if (info->args[3] == 0x1000) {
 			printf("AT_EMPTY_PATH");
 		} else if (info->args[3] == 0) {
@@ -151,14 +241,15 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		return;
 	}
 
-	if ((is_64 && num == 9)) { // mmap
+	// mmap
+	if ((is_64 && num == 9)) {
 		if (info->args[0] == 0) {
 			printf("NULL");
 		} else {
 			printf("%#llx", info->args[0]);
 		}
-		printf(", %#llx, ", info->args[1]);
-		// Prot flags
+		printf(", %llu, ", info->args[1]);
+
 		unsigned long prot = info->args[2];
 		if (prot == 0) printf("PROT_NONE");
 		else {
@@ -168,13 +259,16 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 			if (prot & 0x4) { if (!first) printf("|"); printf("PROT_EXEC"); }
 		}
 		printf(", ");
-		// Map flags
+
 		unsigned long flags = info->args[3];
 		int first = 1;
 		if (flags & 0x01) { printf("MAP_SHARED"); first = 0; }
 		if (flags & 0x02) { if (!first) printf("|"); printf("MAP_PRIVATE"); first = 0; }
-		if (flags & 0x20) { if (!first) printf("|"); printf("MAP_ANONYMOUS"); }
+		if (flags & 0x20) { if (!first) printf("|"); printf("MAP_ANONYMOUS"); first = 0; }
+		if (flags & 0x10) { if (!first) printf("|"); printf("MAP_FIXED"); first = 0; }
+		if (flags & 0x4000) { if (!first) printf("|"); printf("MAP_DENYWRITE"); }
 		printf(", ");
+
 		if (info->args[4] == (unsigned long long)-1) {
 			printf("-1");
 		} else {
@@ -189,8 +283,9 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		return;
 	}
 
-	if ((is_64 && num == 10)) { // mprotect
-		printf("%#llx, %#llx, ", info->args[0], info->args[1]);
+	// mprotect
+	if ((is_64 && num == 10)) {
+		printf("%#llx, %llu, ", info->args[0], info->args[1]);
 		unsigned long prot = info->args[2];
 		if (prot == 0) printf("PROT_NONE");
 		else {
@@ -202,9 +297,25 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		return;
 	}
 
-	if (is_64 && num == 16) { // ioctl
+	// munmap
+	if (is_64 && num == 11) {
+		printf("%#llx, %llu", info->args[0], info->args[1]);
+		return;
+	}
+
+	// brk
+	if (is_64 && num == 12) {
+		if (info->args[0] == 0) {
+			printf("NULL");
+		} else {
+			printf("%#llx", info->args[0]);
+		}
+		return;
+	}
+
+	// ioctl
+	if (is_64 && num == 16) {
 		printf("%d, ", (int)info->args[0]);
-		// Commandes ioctl courantes
 		unsigned long cmd = info->args[1];
 		if (cmd == 0x5401) printf("TCGETS");
 		else if (cmd == 0x5413) printf("TIOCGWINSZ");
@@ -212,6 +323,76 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		if (info->arg_count > 2) {
 			printf(", %#llx", info->args[2]);
 		}
+		return;
+	}
+
+	// pread64, pwrite64
+	if ((is_64 && num == 17) || (is_64 && num == 18)) {
+		printf("%d, %#llx, %llu", (int)info->args[0], info->args[1], info->args[2]);
+		if (info->arg_count > 3) {
+			printf(", %#llx", info->args[3]);
+		}
+		return;
+	}
+
+	// statfs
+	if (is_64 && num == 137) {
+		print_string_arg(pid, info->args[0], 32);
+		printf(", %#llx", info->args[1]);
+		return;
+	}
+
+	// arch_prctl
+	if (is_64 && num == 158) {
+		printf("%#llx, %#llx", info->args[0], info->args[1]);
+		if (info->arg_count > 2 && info->args[2] != 0) {
+			printf(", %#llx", info->args[2]);
+		}
+		if (info->arg_count > 3 && info->args[3] != 0) {
+			printf(", %#llx", info->args[3]);
+		}
+		return;
+	}
+
+	// getdents64
+	if (is_64 && num == 217) {
+		printf("%d, %#llx, %llu", (int)info->args[0], info->args[1], info->args[2]);
+		return;
+	}
+
+	// set_tid_address
+	if (is_64 && num == 218) {
+		printf("%#llx", info->args[0]);
+		return;
+	}
+
+	// set_robust_list
+	if (is_64 && num == 273) {
+		printf("%#llx, %llu", info->args[0], info->args[1]);
+		return;
+	}
+
+	// prlimit64
+	if (is_64 && num == 302) {
+		if (info->args[0] == 0) {
+			printf("0");
+		} else {
+			printf("%d", (int)info->args[0]);
+		}
+		printf(", %#llx, %#llx, %#llx", info->args[1], info->args[2], info->args[3]);
+		return;
+	}
+
+	// getrandom
+	if (is_64 && num == 318) {
+		printf("%#llx, %llu, %#llx", info->args[0], info->args[1], info->args[2]);
+		return;
+	}
+
+	// rseq
+	if (is_64 && num == 334) {
+		printf("%#llx, %#llx, %#llx, %#llx",
+			info->args[0], info->args[1], info->args[2], info->args[3]);
 		return;
 	}
 
@@ -243,9 +424,6 @@ void print_syscall_enter(t_syscall_info *info, pid_t pid)
 
 void print_syscall_exit(t_syscall_info *info)
 {
-	long num = info->number;
-	int is_64 = info->is_64bit;
-
 	printf(") = ");
 
 	if (info->ret_val < 0 && info->ret_val >= -4095) {
@@ -253,11 +431,21 @@ void print_syscall_exit(t_syscall_info *info)
 	} else if (info->ret_val == 0) {
 		printf("0");
 	} else {
-		// Syscalls qui retournent des valeurs décimales
-		if ((is_64 && (num == 0 || num == 1 || num == 3)) ||  // read, write, close
-		    (!is_64 && (num == 3 || num == 4 || num == 6))) { // read, write, close (32-bit)
+		long num = info->number;
+		int is_64 = info->is_64bit;
+
+		// Syscalls qui retournent des file descriptors (afficher en décimal)
+		if ((is_64 && (num == 2 || num == 3 || num == 257)) ||   // open, close, openat
+			(!is_64 && (num == 5 || num == 6 || num == 295))) {  // open, close, openat
 			printf("%lld", info->ret_val);
-		} else {
+		}
+		// Syscalls qui retournent des tailles (read, write)
+		else if ((is_64 && (num == 0 || num == 1)) ||
+				(!is_64 && (num == 3 || num == 4))) {
+			printf("%lld", info->ret_val);
+		}
+		// Par défaut en hexa
+		else {
 			printf("%#lx", (unsigned long)info->ret_val);
 		}
 	}

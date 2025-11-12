@@ -37,15 +37,31 @@ void trace_loop(t_tracer *tracer)
 		}
 
 		if (WIFEXITED(status)) {
+			// Si on était dans exit_group, fermer la parenthèse
+			if (tracer->in_syscall) {
+				long num = tracer->current_syscall.number;
+				int is_64 = tracer->current_syscall.is_64bit;
+				if ((is_64 && num == 231) || (!is_64 && num == 252)) {
+					printf(") = ?\n");
+				}
+			}
 			if (!tracer->option_c) {
-				fprintf(stderr, "\n+++ exited with %d +++\n", WEXITSTATUS(status));
+				fprintf(stderr, "+++ exited with %d +++\n", WEXITSTATUS(status));
 			}
 			break;
 		}
 
 		if (WIFSIGNALED(status)) {
+			// Si on était dans exit_group, fermer la parenthèse
+			if (tracer->in_syscall) {
+				long num = tracer->current_syscall.number;
+				int is_64 = tracer->current_syscall.is_64bit;
+				if ((is_64 && num == 231) || (!is_64 && num == 252)) {
+					printf(") = ?\n");
+				}
+			}
 			if (!tracer->option_c) {
-				fprintf(stderr, "\n+++ killed by SIG%s +++\n",
+				fprintf(stderr, "+++ killed by SIG%s +++\n",
 					strsignal(WTERMSIG(status)));
 			}
 			break;
@@ -158,16 +174,13 @@ int start_trace(char **argv, char **envp, int option_c)
 		close(pipefd[1]); // Fermer le côté écriture
 
 		// Attendre que le parent soit prêt (bloque sur read)
-		if (read(pipefd[0], &dummy, 1) == -1){
-			perror("read pipe");
-			exit(1);
-		}
+		read(pipefd[0], &dummy, 1);
 		close(pipefd[0]);
 
 		// Maintenant execve
 		execve(argv[0], argv, envp);
-		perror(argv[0]);
-		exit(1);
+		// Si on arrive ici, execve a échoué
+		_exit(127);
 	}
 
 	// Processus parent
@@ -235,10 +248,87 @@ int start_trace(char **argv, char **envp, int option_c)
 	}
 
 	// Débloquer l'enfant pour qu'il puisse faire execve
+	write(pipefd[1], "X", 1);
 	close(pipefd[1]);
 
-	// Démarrer le traçage immédiatement (pas besoin de waitpid supplémentaire)
-	// Le premier PTRACE_SYSCALL dans trace_loop va reprendre l'exécution
+	// ============================================================
+	// NOUVEAU : Skip tous les syscalls jusqu'à la SORTIE d'execve
+	// ============================================================
+	int seen_execve_exit = 0;
+	struct iovec iov;
+	iov.iov_base = &tracer.regs;
+	iov.iov_len = sizeof(tracer.regs);
+
+	while (!seen_execve_exit) {
+		if (ptrace(PTRACE_SYSCALL, tracer.child_pid, NULL, NULL) == -1) {
+			perror("ptrace SYSCALL in skip loop");
+			kill(tracer.child_pid, SIGKILL);
+			if (path_resolved)
+				free(path_resolved);
+			return 1;
+		}
+
+		if (waitpid(tracer.child_pid, &status, 0) == -1) {
+			perror("waitpid in skip loop");
+			kill(tracer.child_pid, SIGKILL);
+			if (path_resolved)
+				free(path_resolved);
+			return 1;
+		}
+
+		// Si le processus s'est terminé avant execve (erreur)
+		if (WIFEXITED(status) || WIFSIGNALED(status)) {
+			if (path_resolved)
+				free(path_resolved);
+			return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+		}
+
+		if (WIFSTOPPED(status)) {
+			int sig = WSTOPSIG(status);
+
+			if (sig == (SIGTRAP | 0x80)) {
+				// C'est un syscall-stop
+				if (ptrace(PTRACE_GETREGSET, tracer.child_pid,
+						  NT_PRSTATUS, &iov) == -1) {
+					perror("ptrace GETREGSET in skip loop");
+					continue;
+				}
+
+				// Récupérer le numéro de syscall
+				long syscall_num = tracer.is_64bit ?
+					tracer.regs.orig_rax :
+					(tracer.regs.orig_rax & 0xFFFFFFFF);
+
+				// Vérifier si c'est execve
+				// 59 = execve (64-bit), 11 = execve (32-bit)
+				int is_execve = (tracer.is_64bit && syscall_num == 59) ||
+				                (!tracer.is_64bit && syscall_num == 11);
+
+				if (is_execve) {
+					if (!tracer.in_syscall) {
+						// Entrée dans execve - on note et on continue
+						tracer.in_syscall = 1;
+					} else {
+						// Sortie d'execve - on commence le vrai traçage
+						tracer.in_syscall = 0;
+						seen_execve_exit = 1;
+					}
+				}
+			} else if (sig != SIGTRAP) {
+				// Autre signal pendant le skip - le relayer
+				if (ptrace(PTRACE_SYSCALL, tracer.child_pid, NULL, sig) == -1) {
+					perror("ptrace SYSCALL with signal in skip");
+					kill(tracer.child_pid, SIGKILL);
+					if (path_resolved)
+						free(path_resolved);
+					return 1;
+				}
+				continue;
+			}
+		}
+	}
+
+	// Maintenant on démarre le vrai traçage (après execve)
 	trace_loop(&tracer);
 
 	// Afficher les statistiques si option -c

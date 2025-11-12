@@ -26,6 +26,7 @@ int get_syscall_arg_count(long number, int is_64bit)
 			case 161: // chroot
 			case 162: // sync
 			case 231: // exit_group
+			case 218: // set_tid_address
 				return 1;
 
 			// 2 arguments
@@ -41,7 +42,6 @@ int get_syscall_arg_count(long number, int is_64bit)
 			case 89:  // readlink
 			case 90:  // chmod
 			case 91:  // fchmod
-			case 218: // set_tid_address
 			case 273: // set_robust_list
 				return 2;
 

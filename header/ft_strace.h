@@ -17,10 +17,6 @@
 # include <time.h>
 # include <sys/time.h>
 
-# ifndef NT_PRSTATUS
-#  define NT_PRSTATUS 1
-# endif
-
 typedef struct s_syscall_info {
     long number;
     const char *name;
