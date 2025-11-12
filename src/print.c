@@ -19,12 +19,38 @@ static int is_printable_content(const char *buf, size_t len)
 	return len > 0 && (printable * 100 / len) > 70;  // Si >70% printable
 }
 
+// Lire la mémoire via /proc/PID/mem
+static int read_process_memory(pid_t pid, unsigned long long addr, void *buf, size_t len)
+{
+	char mem_path[64];
+	int fd;
+	ssize_t nread;
+
+	snprintf(mem_path, sizeof(mem_path), "/proc/%d/mem", pid);
+
+	fd = open(mem_path, O_RDONLY);
+	if (fd == -1) {
+		return -1;
+	}
+
+	// Chercher à l'adresse
+	if (lseek(fd, addr, SEEK_SET) == -1) {
+		close(fd);
+		return -1;
+	}
+
+	// Lire
+	nread = read(fd, buf, len);
+	close(fd);
+
+	return (nread == (ssize_t)len) ? 0 : -1;
+}
+
 // Lire une chaîne depuis le processus tracé
 static void print_string_arg(pid_t pid, unsigned long long addr, int max_len)
 {
 	char buffer[256];
 	int i;
-	long data;
 
 	memset(buffer, 0, sizeof(buffer));
 
@@ -33,29 +59,15 @@ static void print_string_arg(pid_t pid, unsigned long long addr, int max_len)
 		return;
 	}
 
-	printf("\"");
-	for (i = 0; i < max_len && i < 255; i += sizeof(long)) {
-		errno = 0;
-		data = ptrace(PTRACE_PEEKDATA, pid, addr + i, NULL);
-		if (errno != 0) {
-			printf("...");
-			break;
-		}
-
-		memcpy(buffer + i, &data, sizeof(long));
-
-		int j;
-		for (j = 0; j < (int)sizeof(long) && i + j < 255; j++) {
-			if (buffer[i + j] == '\0') {
-				buffer[i + j] = '\0';
-				i = max_len;
-				break;
-			}
-		}
+	// Lire via /proc
+	if (read_process_memory(pid, addr, buffer, max_len < 255 ? max_len : 255) != 0) {
+		printf("%#llx", addr);  // Si échec, afficher l'adresse
+		return;
 	}
+
 	buffer[255] = '\0';
 
-	// Afficher la chaîne avec échappement
+	printf("\"");
 	for (i = 0; buffer[i] && i < 32; i++) {
 		if (buffer[i] >= 32 && buffer[i] < 127) {
 			putchar(buffer[i]);
@@ -113,26 +125,15 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		if (size > 0 && size <= 1024) {
 			char buffer[1025];
 			size_t to_read = size > 1024 ? 1024 : size;
-			size_t j;
-			int can_read = 1;
 
 			memset(buffer, 0, sizeof(buffer));
 
-			for (j = 0; j < to_read; j += sizeof(long)) {
-				errno = 0;
-				long data = ptrace(PTRACE_PEEKDATA, pid, addr + j, NULL);
-				if (errno != 0) {
-					can_read = 0;
-					break;
-				}
-				size_t copy_len = (to_read - j) < sizeof(long) ? (to_read - j) : sizeof(long);
-				memcpy(buffer + j, &data, copy_len);
-			}
-
-			if (can_read && is_printable_content(buffer, to_read)) {
+			// Utiliser /proc au lieu de ptrace
+			if (read_process_memory(pid, addr, buffer, to_read) == 0
+				&& is_printable_content(buffer, to_read)) {
 				printf("\"");
 				size_t display_len = to_read > 32 ? 32 : to_read;
-				for (j = 0; j < display_len; j++) {
+				for (size_t j = 0; j < display_len; j++) {
 					if (buffer[j] >= 32 && buffer[j] < 127) {
 						putchar(buffer[j]);
 					} else if (buffer[j] == '\n') {

@@ -16,6 +16,7 @@
 # include <elf.h>
 # include <time.h>
 # include <sys/time.h>
+# include <fcntl.h>
 
 typedef struct s_syscall_info {
     long number;
