@@ -1,5 +1,38 @@
 #include "ft_strace.h"
 
+static t_cleanup g_cleanup = {-1, -1, NULL};
+
+static void signal_handler(int sig)
+{
+	(void)sig;
+
+	// Fermer le pipe si encore ouvert
+	if (g_cleanup.pipe_fd != -1) {
+		close(g_cleanup.pipe_fd);
+	}
+
+	// Tuer le processus enfant
+	if (g_cleanup.child_pid > 0) {
+		kill(g_cleanup.child_pid, SIGKILL);
+		waitpid(g_cleanup.child_pid, NULL, 0);
+	}
+
+	// Libérer la mémoire
+	if (g_cleanup.path_resolved) {
+		free(g_cleanup.path_resolved);
+	}
+
+	_exit(128 + sig);
+}
+
+void cleanup(char *str){
+	if (str)
+		free(str);
+	g_cleanup.child_pid = -1;
+	g_cleanup.pipe_fd = -1;
+	g_cleanup.path_resolved = NULL;
+}
+
 int detect_architecture(pid_t pid)
 {
 	struct iovec iov;
@@ -36,7 +69,7 @@ void trace_loop(t_tracer *tracer)
 			break;
 		}
 
-		if (WIFEXITED(status)) {
+		if (WIFEXITED(status)) { // end normal way
 			// Si on était dans exit_group, fermer la parenthèse
 			if (tracer->in_syscall) {
 				long num = tracer->current_syscall.number;
@@ -51,7 +84,7 @@ void trace_loop(t_tracer *tracer)
 			break;
 		}
 
-		if (WIFSIGNALED(status)) {
+		if (WIFSIGNALED(status)) { // endedd by signal
 			// Si on était dans exit_group, fermer la parenthèse
 			if (tracer->in_syscall) {
 				long num = tracer->current_syscall.number;
@@ -186,14 +219,21 @@ int start_trace(char **argv, char **envp, int option_c)
 	// Processus parent
 	close(pipefd[0]); // Fermer le côté lecture
 
+	g_cleanup.child_pid = tracer.child_pid;
+	g_cleanup.pipe_fd = pipefd[1];
+	g_cleanup.path_resolved = path_resolved;
+
+	// Installer les signal handlers
+	signal(SIGINT, signal_handler);
+	signal(SIGTERM, signal_handler);
+
 	// Attacher avec PTRACE_SEIZE AVANT que l'enfant n'appelle execve
 	if (ptrace(PTRACE_SEIZE, tracer.child_pid, NULL,
 	           PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) == -1) {
 		perror("ptrace SEIZE");
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
-		if (path_resolved)
-			free(path_resolved);
+		cleanup(path_resolved);
 		return 1;
 	}
 
@@ -202,8 +242,7 @@ int start_trace(char **argv, char **envp, int option_c)
 		perror("ptrace INTERRUPT");
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
-		if (path_resolved)
-			free(path_resolved);
+		cleanup(path_resolved);
 		return 1;
 	}
 
@@ -212,8 +251,7 @@ int start_trace(char **argv, char **envp, int option_c)
 		perror("waitpid");
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
-		if (path_resolved)
-			free(path_resolved);
+		cleanup(path_resolved);
 		return 1;
 	}
 
@@ -221,8 +259,7 @@ int start_trace(char **argv, char **envp, int option_c)
 		fprintf(stderr, "Child not stopped\n");
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
-		if (path_resolved)
-			free(path_resolved);
+		cleanup(path_resolved);
 		return 1;
 	}
 
@@ -231,8 +268,7 @@ int start_trace(char **argv, char **envp, int option_c)
 	if (tracer.is_64bit == -1) {
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
-		if (path_resolved)
-			free(path_resolved);
+		cleanup(path_resolved);
 		return 1;
 	}
 
@@ -242,14 +278,14 @@ int start_trace(char **argv, char **envp, int option_c)
 		perror("ptrace SETOPTIONS");
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
-		if (path_resolved)
-			free(path_resolved);
+		cleanup(path_resolved);
 		return 1;
 	}
 
 	// Débloquer l'enfant pour qu'il puisse faire execve
 	write(pipefd[1], "X", 1);
 	close(pipefd[1]);
+	g_cleanup.pipe_fd = -1;
 
 	//Skip tous les syscalls jusqu'à la SORTIE d'execve
 	int seen_execve_exit = 0;
@@ -263,6 +299,8 @@ int start_trace(char **argv, char **envp, int option_c)
 			kill(tracer.child_pid, SIGKILL);
 			if (path_resolved)
 				free(path_resolved);
+			g_cleanup.child_pid = -1;
+			g_cleanup.path_resolved = NULL;
 			return 1;
 		}
 
@@ -271,6 +309,8 @@ int start_trace(char **argv, char **envp, int option_c)
 			kill(tracer.child_pid, SIGKILL);
 			if (path_resolved)
 				free(path_resolved);
+			g_cleanup.child_pid = -1;
+			g_cleanup.path_resolved = NULL;
 			return 1;
 		}
 
@@ -278,6 +318,8 @@ int start_trace(char **argv, char **envp, int option_c)
 		if (WIFEXITED(status) || WIFSIGNALED(status)) {
 			if (path_resolved)
 				free(path_resolved);
+			g_cleanup.child_pid = -1;
+			g_cleanup.path_resolved = NULL;
 			return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 		}
 
@@ -319,6 +361,8 @@ int start_trace(char **argv, char **envp, int option_c)
 					kill(tracer.child_pid, SIGKILL);
 					if (path_resolved)
 						free(path_resolved);
+					g_cleanup.child_pid = -1;
+					g_cleanup.path_resolved = NULL;
 					return 1;
 				}
 				continue;
@@ -328,6 +372,11 @@ int start_trace(char **argv, char **envp, int option_c)
 
 	// Maintenant on démarre le vrai traçage (après execve)
 	trace_loop(&tracer);
+
+	g_cleanup.child_pid = -1;
+	g_cleanup.path_resolved = NULL;
+	signal(SIGINT, SIG_DFL);
+	signal(SIGTERM, SIG_DFL);
 
 	// Afficher les statistiques si option -c
 	if (option_c) {

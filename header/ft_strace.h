@@ -18,6 +18,12 @@
 #include <sys/time.h>
 #include <fcntl.h>
 
+typedef struct s_cleanup {
+	pid_t child_pid;
+	int pipe_fd;
+	char *path_resolved;
+} t_cleanup;
+
 typedef struct s_syscall_info {
 	long number;
 	const char *name;
