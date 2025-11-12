@@ -251,9 +251,7 @@ int start_trace(char **argv, char **envp, int option_c)
 	write(pipefd[1], "X", 1);
 	close(pipefd[1]);
 
-	// ============================================================
-	// NOUVEAU : Skip tous les syscalls jusqu'à la SORTIE d'execve
-	// ============================================================
+	//Skip tous les syscalls jusqu'à la SORTIE d'execve
 	int seen_execve_exit = 0;
 	struct iovec iov;
 	iov.iov_base = &tracer.regs;
