@@ -2,6 +2,18 @@
 
 #define AT_FDCWD -100
 
+void print_signal(pid_t pid, int sig)
+{
+	siginfo_t si;
+
+	if (ptrace(PTRACE_GETSIGINFO, pid, NULL, &si) == 0) {
+		fprintf(stderr, "--- %s {si_signo=%d, si_code=%d} ---\n",
+			strsignal(sig), si.si_signo, si.si_code);
+	} else {
+		fprintf(stderr, "--- %s ---\n", strsignal(sig));
+	}
+}
+
 // Vérifier si le contenu est affichable
 static int is_printable_content(const char *buf, size_t len)
 {
@@ -452,16 +464,4 @@ void print_syscall_exit(t_syscall_info *info)
 	}
 
 	printf("\n");
-}
-
-void print_signal(pid_t pid, int sig)
-{
-	siginfo_t si;
-
-	if (ptrace(PTRACE_GETSIGINFO, pid, NULL, &si) == 0) {
-		fprintf(stderr, "--- %s {si_signo=%d, si_code=%d} ---\n",
-			strsignal(sig), si.si_signo, si.si_code);
-	} else {
-		fprintf(stderr, "--- %s ---\n", strsignal(sig));
-	}
 }

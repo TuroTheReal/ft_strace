@@ -42,7 +42,12 @@ int detect_architecture(pid_t pid)
 		return -1;
 	}
 
-	return (iov.iov_len == sizeof(struct user_regs_struct)) ? 1 : 0;
+	if (iov.iov_len == 216) // x86_64 (sizeof en 64 bits)
+		return 64;
+	else if (iov.iov_len == 68) // i386 (sizeof en 32 bits)
+		return 32;
+	else
+		return -1;
 }
 
 void trace_loop(t_tracer *tracer)
