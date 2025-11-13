@@ -3,6 +3,7 @@
 void get_syscall_info(t_tracer *tracer, t_syscall_info *info)
 {
 	if (tracer->is_64bit) {
+		// 64-bit: registres standard
 		info->number = tracer->regs.orig_rax;
 		info->args[0] = tracer->regs.rdi;
 		info->args[1] = tracer->regs.rsi;
@@ -12,6 +13,9 @@ void get_syscall_info(t_tracer *tracer, t_syscall_info *info)
 		info->args[5] = tracer->regs.r9;
 		info->name = get_syscall_name_64(info->number);
 	} else {
+		// 32-bit: convention différente
+		// Les registres 32-bit utilisent ebx, ecx, edx, esi, edi, ebp
+		// qui sont stockés dans les 32 bits bas de leurs équivalents 64-bit
 		info->number = tracer->regs.orig_rax & 0xFFFFFFFF;
 		info->args[0] = tracer->regs.rbx & 0xFFFFFFFF;
 		info->args[1] = tracer->regs.rcx & 0xFFFFFFFF;
@@ -29,11 +33,12 @@ void get_syscall_info(t_tracer *tracer, t_syscall_info *info)
 void get_syscall_retval(t_tracer *tracer, t_syscall_info *info)
 {
 	if (tracer->is_64bit) {
-		info->ret_val = tracer->regs.rax;
+		// 64-bit: valeur de retour signée
+		info->ret_val = (long long)tracer->regs.rax;
 	} else {
-		info->ret_val = tracer->regs.rax & 0xFFFFFFFF;
-		if (info->ret_val & 0x80000000) {
-			info->ret_val |= 0xFFFFFFFF00000000;
-		}
+		// 32-bit: IMPORTANT - traiter comme un int signé 32-bit
+		// puis étendre en 64-bit signé
+		int ret32 = (int)(tracer->regs.rax & 0xFFFFFFFF);
+		info->ret_val = (long long)ret32;
 	}
 }
