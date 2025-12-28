@@ -176,12 +176,16 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		print_string_arg(pid, info->args[0], 32);
 		printf(", ");
 		unsigned long flags = info->args[1];
-		if (flags & 0x40) printf("O_CREAT|");
-		if (flags & 0x200) printf("O_DIRECTORY|");
-		if (flags & 0x80000) printf("O_CLOEXEC|");
+
+		// Access mode d'abord
 		if ((flags & 0x3) == 0) printf("O_RDONLY");
 		else if ((flags & 0x3) == 1) printf("O_WRONLY");
 		else if ((flags & 0x3) == 2) printf("O_RDWR");
+
+		// Puis les autres flags
+		if (flags & 0x40) printf("|O_CREAT");
+		if (flags & 0x200) printf("|O_DIRECTORY");
+		if (flags & 0x80000) printf("|O_CLOEXEC");
 		return;
 	}
 
@@ -212,12 +216,17 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		print_string_arg(pid, info->args[1], 32);
 		printf(", ");
 		unsigned long flags = info->args[2];
-		if (flags & 0x40) printf("O_CREAT|");
-		if (flags & 0x200) printf("O_DIRECTORY|");
-		if (flags & 0x80000) printf("O_CLOEXEC|");
+
+		// Access mode d'abord
 		if ((flags & 0x3) == 0) printf("O_RDONLY");
 		else if ((flags & 0x3) == 1) printf("O_WRONLY");
 		else if ((flags & 0x3) == 2) printf("O_RDWR");
+
+		// Puis les autres flags
+		if (flags & 0x40) printf("|O_CREAT");
+		if (flags & 0x200) printf("|O_DIRECTORY");
+		if (flags & 0x80000) printf("|O_CLOEXEC");
+
 		if (info->arg_count > 3 && info->args[3] != 0) {
 			printf(", %#llo", info->args[3]);
 		}
@@ -435,12 +444,61 @@ void print_syscall_enter(t_syscall_info *info, pid_t pid)
 	fflush(stdout);
 }
 
+// Convertir errno en nom symbolique
+static const char *errno_to_name(int err)
+{
+	switch (err) {
+		case EPERM: return "EPERM";
+		case ENOENT: return "ENOENT";
+		case ESRCH: return "ESRCH";
+		case EINTR: return "EINTR";
+		case EIO: return "EIO";
+		case ENXIO: return "ENXIO";
+		case E2BIG: return "E2BIG";
+		case ENOEXEC: return "ENOEXEC";
+		case EBADF: return "EBADF";
+		case ECHILD: return "ECHILD";
+		case EAGAIN: return "EAGAIN";
+		case ENOMEM: return "ENOMEM";
+		case EACCES: return "EACCES";
+		case EFAULT: return "EFAULT";
+		case ENOTBLK: return "ENOTBLK";
+		case EBUSY: return "EBUSY";
+		case EEXIST: return "EEXIST";
+		case EXDEV: return "EXDEV";
+		case ENODEV: return "ENODEV";
+		case ENOTDIR: return "ENOTDIR";
+		case EISDIR: return "EISDIR";
+		case EINVAL: return "EINVAL";
+		case ENFILE: return "ENFILE";
+		case EMFILE: return "EMFILE";
+		case ENOTTY: return "ENOTTY";
+		case ETXTBSY: return "ETXTBSY";
+		case EFBIG: return "EFBIG";
+		case ENOSPC: return "ENOSPC";
+		case ESPIPE: return "ESPIPE";
+		case EROFS: return "EROFS";
+		case EMLINK: return "EMLINK";
+		case EPIPE: return "EPIPE";
+		case EDOM: return "EDOM";
+		case ERANGE: return "ERANGE";
+		default: return NULL;
+	}
+}
+
 void print_syscall_exit(t_syscall_info *info)
 {
 	printf(") = ");
 
 	if (info->ret_val < 0 && info->ret_val >= -4095) {
-		printf("%lld %s", info->ret_val, strerror((int)-info->ret_val));
+		// Erreur: afficher -1 + nom symbolique + description
+		int err = (int)-info->ret_val;
+		const char *err_name = errno_to_name(err);
+		if (err_name) {
+			printf("-1 %s (%s)", err_name, strerror(err));
+		} else {
+			printf("-1 ERRNO_%d (%s)", err, strerror(err));
+		}
 	} else if (info->ret_val == 0) {
 		printf("0");
 	} else {

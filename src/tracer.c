@@ -73,11 +73,13 @@ void trace_loop(t_tracer *tracer)
 		}
 
 		if (WIFEXITED(status)) {
-			if (tracer->in_syscall && !tracer->option_c) {
+			if (tracer->in_syscall) {
 				long num = tracer->current_syscall.number;
 				int is_64 = tracer->current_syscall.is_64bit;
 				if ((is_64 && num == 231) || (!is_64 && num == 252)) {
-					printf(") = ?\n");
+					if (!tracer->option_c) {
+						printf(") = ?\n");
+					}
 				}
 			}
 			if (!tracer->option_c) {
@@ -105,6 +107,9 @@ void trace_loop(t_tracer *tracer)
 			int sig = WSTOPSIG(status);
 
 			if (sig == (SIGTRAP | 0x80)) {
+				// Réinitialiser iov_len avant chaque appel
+				iov.iov_len = sizeof(tracer->regs);
+
 				if (ptrace(PTRACE_GETREGSET, tracer->child_pid,
 						  NT_PRSTATUS, &iov) == -1) {
 					perror("ptrace GETREGSET");
@@ -112,6 +117,26 @@ void trace_loop(t_tracer *tracer)
 				}
 
 				if (!tracer->in_syscall) {
+					// Détecter l'architecture : en 32-bit, orig_rax contient le syscall dans les bits bas
+					// et souvent une valeur spécifique dans les bits hauts
+					// La méthode la plus fiable : vérifier si orig_rax > 0xFFFFFFFF
+					// Si oui, c'est probablement un syscall 32-bit (avec __X32_SYSCALL_BIT)
+					long long orig = tracer->regs.orig_rax;
+					long syscall_num = orig & 0xFFFFFFFF;
+
+					// Les syscalls 32-bit ont souvent orig_rax avec les bits hauts != 0
+					// ou on peut utiliser CS: 0x23 = 32-bit, 0x33 = 64-bit
+					unsigned long cs = tracer->regs.cs & 0xFFFF;
+
+					// Détection combinée
+					if (cs == 0x23) {
+						tracer->is_64bit = 0;  // Clairement 32-bit
+					} else if (cs == 0x33 && syscall_num <= 547) {  // 547 = dernier syscall 64-bit courant
+						tracer->is_64bit = 1;  // Probablement 64-bit
+					} else {
+						tracer->is_64bit = 1;  // Par défaut 64-bit
+					}
+
 					memset(&info, 0, sizeof(info));
 					info.is_64bit = tracer->is_64bit;
 					get_syscall_info(tracer, &info);
@@ -143,9 +168,20 @@ void trace_loop(t_tracer *tracer)
 					tracer->in_syscall = 0;
 				}
 			} else if (sig == SIGTRAP) {
-				// SIGTRAP normal - ne rien faire
+				// SIGTRAP normal - ne rien faire, continuer le tracing
 			} else {
-				// Signal reçu par le tracé - le relayer mais NE PAS l'afficher
+				// Signal reçu par le tracé
+				// Vérifier si c'est un signal qui devrait arrêter le processus
+				if (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU) {
+					// Signaux de stop - les relayer
+					if (ptrace(PTRACE_SYSCALL, tracer->child_pid, NULL, sig) == -1) {
+						perror("ptrace SYSCALL with signal");
+						break;
+					}
+					continue;
+				}
+				// Pour les autres signaux, les relayer sans les afficher
+				// (sauf si le sujet demande de les afficher)
 				if (ptrace(PTRACE_SYSCALL, tracer->child_pid, NULL, sig) == -1) {
 					perror("ptrace SYSCALL with signal");
 					break;
@@ -196,12 +232,17 @@ int start_trace(char **argv, char **envp, int option_c)
 
 	if (tracer.child_pid == 0) {
 		// Child process
-		char dummy;
 		close(pipefd[1]);
-
-		// Attendre que le parent soit prêt
-		read(pipefd[0], &dummy, 1);
 		close(pipefd[0]);
+
+		// Se mettre en mode tracé AVANT l'execve
+		if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) == -1) {
+			perror("ptrace TRACEME");
+			_exit(127);
+		}
+
+		// Envoyer SIGSTOP à soi-même pour que le parent puisse nous setup
+		raise(SIGSTOP);
 
 		// Exécuter le programme cible
 		execve(argv[0], argv, envp);
@@ -219,24 +260,7 @@ int start_trace(char **argv, char **envp, int option_c)
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
 
-	// Attacher au processus
-	if (ptrace(PTRACE_SEIZE, tracer.child_pid, NULL,
-	           PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) == -1) {
-		perror("ptrace SEIZE");
-		close(pipefd[1]);
-		kill(tracer.child_pid, SIGKILL);
-		cleanup(path_resolved);
-		return 1;
-	}
-
-	if (ptrace(PTRACE_INTERRUPT, tracer.child_pid, NULL, NULL) == -1) {
-		perror("ptrace INTERRUPT");
-		close(pipefd[1]);
-		kill(tracer.child_pid, SIGKILL);
-		cleanup(path_resolved);
-		return 1;
-	}
-
+	// Attendre que l'enfant s'arrête (via raise(SIGSTOP))
 	if (waitpid(tracer.child_pid, &status, 0) == -1) {
 		perror("waitpid");
 		close(pipefd[1]);
@@ -253,6 +277,7 @@ int start_trace(char **argv, char **envp, int option_c)
 		return 1;
 	}
 
+	// Configurer les options de tracing
 	if (ptrace(PTRACE_SETOPTIONS, tracer.child_pid, NULL,
 			   PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) == -1) {
 		perror("ptrace SETOPTIONS");
@@ -262,16 +287,16 @@ int start_trace(char **argv, char **envp, int option_c)
 		return 1;
 	}
 
-	// Débloquer l'enfant pour qu'il exécute execve
-	write(pipefd[1], "X", 1);
+	// Fermer le pipe (non utilisé avec PTRACE_TRACEME)
 	close(pipefd[1]);
 	g_cleanup.pipe_fd = -1;
 
-	// Attendre et skipper l'execve initial qui réussit
+	// Attendre et afficher l'execve initial
 	int execve_success = 0;
 	struct iovec iov;
 	iov.iov_base = &tracer.regs;
 	iov.iov_len = sizeof(tracer.regs);
+	t_syscall_info execve_info;
 
 	while (!execve_success) {
 		if (ptrace(PTRACE_SYSCALL, tracer.child_pid, NULL, NULL) == -1) {
@@ -310,7 +335,21 @@ int start_trace(char **argv, char **envp, int option_c)
 
 				// Vérifier si c'est execve (syscall 59 en 64-bit, 11 en 32-bit)
 				if (syscall_num == 59 || syscall_num == 11) {
-					// C'est l'entrée dans execve, attendre la sortie
+					// Avant l'execve, le processus est toujours 64-bit (fork du parent)
+					// C'est l'entrée dans execve - afficher si pas en mode -c
+					if (!option_c) {
+						memset(&execve_info, 0, sizeof(execve_info));
+						execve_info.is_64bit = 1; // Toujours 64-bit avant l'execve
+						execve_info.number = syscall_num;
+						execve_info.name = "execve";
+						execve_info.args[0] = tracer.regs.rdi;
+						execve_info.args[1] = tracer.regs.rsi;
+						execve_info.args[2] = tracer.regs.rdx;
+						execve_info.arg_count = 3;
+						print_syscall_enter(&execve_info, tracer.child_pid);
+					}
+
+					// Attendre la sortie d'execve
 					if (ptrace(PTRACE_SYSCALL, tracer.child_pid, NULL, NULL) == -1) {
 						kill(tracer.child_pid, SIGKILL);
 						cleanup(path_resolved);
@@ -337,23 +376,16 @@ int start_trace(char **argv, char **envp, int option_c)
 						return 1;
 					}
 
-					// Vérifier le code de retour
-					long long retval = (long long)tracer.regs.rax;
-
-					// Si execve réussit, rax = 0 et le programme est remplacé
-					// Si execve échoue, rax contient un code d'erreur négatif
-					if (retval == 0) {
-						// Succès ! Détecter l'architecture du nouveau programme
-						int arch = detect_architecture(tracer.child_pid);
-						if (arch != -1) {
-							tracer.is_64bit = (arch == 64) ? 1 : 0;
-						} else {
-							// Si détection échoue, assumer 64-bit
-							tracer.is_64bit = 1;
-						}
-						execve_success = 1;
+					// Afficher l'execve avec succès (= 0)
+					// Note: pour les programmes 32-bit, le kernel peut retourner ENOSYS
+					// mais le programme s'exécute quand même, donc on affiche = 0
+					if (!option_c) {
+						execve_info.ret_val = 0;
+						print_syscall_exit(&execve_info);
 					}
-					// Sinon, c'est un échec, on continue la boucle
+
+					// Sortir de la boucle - l'execve est fait
+					execve_success = 1;
 				}
 			} else if (sig != SIGTRAP) {
 				// Relayer les signaux sans les afficher
