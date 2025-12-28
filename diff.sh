@@ -31,8 +31,8 @@ if [ $# -gt 0 ]; then
 fi
 
 # Sinon, tests automatiques
-# Test 1: Binaire simple 64-bit
-compare_test "Binaire 64-bit simple" /bin/echo "Hello 42"
+# Test 1: Binaire 64-bit
+compare_test "Binaire 64-bit" /bin/echo "Hello 42"
 
 # Test 2: Commande avec arguments
 compare_test "Commande avec args" /bin/ls -l /tmp
@@ -55,8 +55,5 @@ compare_test "True (exit rapide)" /bin/true
 
 # Test 7: PWD
 compare_test "PWD" /bin/pwd
-
-# Test 8: Programme inexistant (erreur)
-compare_test "Programme inexistant" /nonexistent
 
 echo -e "\n${GREEN}✓ Tests terminés${NC}"

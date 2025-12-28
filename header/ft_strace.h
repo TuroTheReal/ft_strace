@@ -45,6 +45,7 @@ typedef struct s_syscall_stats {
 typedef struct s_tracer {
 	pid_t child_pid;
 	struct user_regs_struct regs;
+	size_t regs_size;  // Taille réelle des registres lus
 	int is_64bit;
 	int in_syscall;
 	int option_c; // -c bonus
