@@ -51,6 +51,7 @@ void trace_loop(t_tracer *tracer)
 	t_syscall_info info;
 	struct iovec iov;
 	int first_syscall = 1;
+	int skip_count = 2;  // Skip read() et close() du pipe
 
 	iov.iov_base = &tracer->regs;
 	iov.iov_len = sizeof(tracer->regs);
@@ -118,7 +119,8 @@ void trace_loop(t_tracer *tracer)
 					get_syscall_info(tracer, &info);
 					gettimeofday(&info.start_time, NULL);
 
-					if (!tracer->option_c) {
+					// Afficher uniquement si on a skip les syscalls de sync
+					if (skip_count == 0 && !tracer->option_c) {
 						print_syscall_enter(&info, tracer->child_pid);
 					}
 
@@ -135,26 +137,32 @@ void trace_loop(t_tracer *tracer)
 					get_syscall_retval(tracer, &info);
 					gettimeofday(&info.end_time, NULL);
 
-					if (!tracer->option_c) {
-						print_syscall_exit(&info);
+					// Décrémenter skip_count si > 0 (pour cacher read/close du pipe)
+					if (skip_count > 0) {
+						skip_count--;
 					} else {
-						update_stats(tracer, &info);
-					}
-
-					// Afficher le message 32-bit après le premier execve UNIQUEMENT
-					if (first_syscall) {
-						long num = info.number;
-						// Vérifier si c'est execve (59 en 64bit, 11 en 32bit)
-						if (num == 59 || num == 11) {
-							// C'est execve - mettre first_syscall à 0 ET afficher si 32-bit
-							first_syscall = 0;
-							if (!tracer->is_64bit && !tracer->option_c) {
-								fflush(stdout);
-								fprintf(stderr, "[ Process PID=%d runs in 32 bit mode. ]\n",
-									tracer->child_pid);
-							}
+						// Afficher normalement
+						if (!tracer->option_c) {
+							print_syscall_exit(&info);
+						} else {
+							update_stats(tracer, &info);
 						}
-						// Si ce n'est pas execve, on garde first_syscall=1
+
+						// Afficher le message 32-bit après le premier execve UNIQUEMENT
+						if (first_syscall) {
+							long num = info.number;
+							// Vérifier si c'est execve (59 en 64bit, 11 en 32bit)
+							if (num == 59 || num == 11) {
+								// C'est execve - mettre first_syscall à 0 ET afficher si 32-bit
+								first_syscall = 0;
+								if (!tracer->is_64bit && !tracer->option_c) {
+									fflush(stdout);
+									fprintf(stderr, "[ Process PID=%d runs in 32 bit mode. ]\n",
+										tracer->child_pid);
+								}
+							}
+							// Si ce n'est pas execve, on garde first_syscall=1
+						}
 					}
 
 					tracer->in_syscall = 0;
