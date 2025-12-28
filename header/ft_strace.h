@@ -18,6 +18,17 @@
 #include <sys/time.h>
 #include <fcntl.h>
 
+// Structure pour les registres 32-bit (i386)
+struct user_regs_struct_i386 {
+	uint32_t ebx, ecx, edx, esi, edi, ebp, eax;
+	uint16_t ds, __ds, es, __es;
+	uint16_t fs, __fs, gs, __gs;
+	uint32_t orig_eax, eip;
+	uint16_t cs, __cs;
+	uint32_t eflags, esp;
+	uint16_t ss, __ss;
+};
+
 typedef struct s_cleanup {
 	pid_t child_pid;
 	int pipe_fd;
@@ -44,7 +55,10 @@ typedef struct s_syscall_stats {
 
 typedef struct s_tracer {
 	pid_t child_pid;
-	struct user_regs_struct regs;
+	union {
+		struct user_regs_struct regs_64;
+		struct user_regs_struct_i386 regs_32;
+	} regs;
 	size_t regs_size;  // Taille réelle des registres lus
 	int is_64bit;
 	int in_syscall;

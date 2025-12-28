@@ -50,6 +50,7 @@ void trace_loop(t_tracer *tracer)
 	int status;
 	t_syscall_info info;
 	struct iovec iov;
+	int first_syscall = 1;
 
 	iov.iov_base = &tracer->regs;
 	iov.iov_len = sizeof(tracer->regs);
@@ -138,6 +139,15 @@ void trace_loop(t_tracer *tracer)
 						print_syscall_exit(&info);
 					} else {
 						update_stats(tracer, &info);
+					}
+
+					if (first_syscall) {
+						first_syscall = 0;
+						if (!tracer->is_64bit && !tracer->option_c) {
+							fflush(stdout);
+							fprintf(stderr, "[ Process PID=%d runs in 32 bit mode. ]\n",
+								tracer->child_pid);
+						}
 					}
 
 					tracer->in_syscall = 0;

@@ -37,14 +37,10 @@ compare_test "Binaire 64-bit" /bin/echo "Hello 42"
 # Test 2: Commande avec arguments
 compare_test "Commande avec args" /bin/ls -l /tmp
 
-# Test 3: Binaire 64-bit (test compilé)
-if [ -f "./test64" ]; then
-    compare_test "Test binaire 64-bit" ./test64
-fi
 
 # Test 4: Binaire 32-bit (test compilé)
-if [ -f "./test32" ]; then
-    compare_test "Test binaire 32-bit" ./test32
+if [ -f "./test_32" ]; then
+    compare_test "Test binaire 32-bit" ./test_32
 fi
 
 # Test 5: Commande avec redirection
