@@ -12,3 +12,5 @@ int main() {
 
     return 0;
 }
+
+// gcc -m32 -o test_32 test_32.c
