@@ -141,13 +141,20 @@ void trace_loop(t_tracer *tracer)
 						update_stats(tracer, &info);
 					}
 
+					// Afficher le message 32-bit après le premier execve UNIQUEMENT
 					if (first_syscall) {
-						first_syscall = 0;
-						if (!tracer->is_64bit && !tracer->option_c) {
-							fflush(stdout);
-							fprintf(stderr, "[ Process PID=%d runs in 32 bit mode. ]\n",
-								tracer->child_pid);
+						long num = info.number;
+						// Vérifier si c'est execve (59 en 64bit, 11 en 32bit)
+						if (num == 59 || num == 11) {
+							// C'est execve - mettre first_syscall à 0 ET afficher si 32-bit
+							first_syscall = 0;
+							if (!tracer->is_64bit && !tracer->option_c) {
+								fflush(stdout);
+								fprintf(stderr, "[ Process PID=%d runs in 32 bit mode. ]\n",
+									tracer->child_pid);
+							}
 						}
+						// Si ce n'est pas execve, on garde first_syscall=1
 					}
 
 					tracer->in_syscall = 0;
@@ -211,15 +218,11 @@ int start_trace(char **argv, char **envp, int option_c)
 	}
 
 	if (tracer.child_pid == 0) {
+		// Enfant: attendre signal du parent puis execve
+		char c;
 		close(pipefd[1]);
+		read(pipefd[0], &c, 1);
 		close(pipefd[0]);
-
-		if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) == -1) {
-			perror("ptrace TRACEME");
-			_exit(127);
-		}
-
-		raise(SIGSTOP);
 
 		execve(argv[0], argv, envp);
 		perror("execve");
@@ -235,33 +238,69 @@ int start_trace(char **argv, char **envp, int option_c)
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
 
-	if (waitpid(tracer.child_pid, &status, 0) == -1) {
-		perror("waitpid");
-		close(pipefd[1]);
-		kill(tracer.child_pid, SIGKILL);
-		cleanup(path_resolved);
-		return 1;
-	}
+	// Petit délai pour que l'enfant soit bloqué sur read()
+	usleep(1000);
 
-	if (!WIFSTOPPED(status)) {
-		fprintf(stderr, "Child not stopped\n");
-		close(pipefd[1]);
-		kill(tracer.child_pid, SIGKILL);
-		cleanup(path_resolved);
-		return 1;
-	}
-
-	if (ptrace(PTRACE_SETOPTIONS, tracer.child_pid, NULL,
+	// PTRACE_SEIZE avec les options
+	if (ptrace(PTRACE_SEIZE, tracer.child_pid, NULL,
 			   PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) == -1) {
-		perror("ptrace SETOPTIONS");
+		perror("ptrace SEIZE");
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
 		cleanup(path_resolved);
 		return 1;
 	}
 
+	// PTRACE_INTERRUPT pour stopper le processus (bloqué dans read)
+	if (ptrace(PTRACE_INTERRUPT, tracer.child_pid, NULL, NULL) == -1) {
+		perror("ptrace INTERRUPT");
+		close(pipefd[1]);
+		kill(tracer.child_pid, SIGKILL);
+		cleanup(path_resolved);
+		return 1;
+	}
+
+	// Attendre l'interruption
+	if (waitpid(tracer.child_pid, &status, 0) == -1) {
+		perror("waitpid interrupt");
+		close(pipefd[1]);
+		kill(tracer.child_pid, SIGKILL);
+		cleanup(path_resolved);
+		return 1;
+	}
+
+	// Débloquer le read() et fermer le pipe
+	write(pipefd[1], "x", 1);
 	close(pipefd[1]);
 	g_cleanup.pipe_fd = -1;
+
+	// Utiliser PTRACE_LISTEN pour reprendre après INTERRUPT
+	// Cela permet au processus de continuer sans tracer le syscall read
+	if (ptrace(PTRACE_LISTEN, tracer.child_pid, NULL, NULL) == -1) {
+		perror("ptrace LISTEN");
+		kill(tracer.child_pid, SIGKILL);
+		cleanup(path_resolved);
+		return 1;
+	}
+
+	// Petit délai pour laisser read() se terminer
+	usleep(2000);
+
+	// Maintenant interrompre à nouveau juste avant execve
+	if (ptrace(PTRACE_INTERRUPT, tracer.child_pid, NULL, NULL) == -1) {
+		perror("ptrace INTERRUPT 2");
+		kill(tracer.child_pid, SIGKILL);
+		cleanup(path_resolved);
+		return 1;
+	}
+
+	// Attendre la seconde interruption
+	if (waitpid(tracer.child_pid, &status, 0) == -1) {
+		perror("waitpid interrupt 2");
+		kill(tracer.child_pid, SIGKILL);
+		cleanup(path_resolved);
+		return 1;
+	}
 
 	trace_loop(&tracer);
 
