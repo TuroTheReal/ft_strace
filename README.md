@@ -15,8 +15,8 @@
 
 ## About
 
-This repository contains my implementation of the **ft_strace** project at 42 School.  
-ft_strace is a recreation of the powerful **strace** system call tracer, one of the most essential debugging and diagnostic tools used by system programmers and security researchers since 1991.  
+This repository contains my implementation of the **ft_strace** project at 42 School.
+ft_strace is a recreation of the powerful **strace** system call tracer, one of the most essential debugging and diagnostic tools used by system programmers and security researchers since 1991.
 Built entirely in **C**, this program intercepts and records system calls made by a process using **ptrace** (process trace), providing deep visibility into program behavior, system interactions, and low-level operations.
 
 The project demonstrates mastery of process control, Linux kernel interfaces, and system-level debugging while implementing the core functionality of the original strace utility.
@@ -313,6 +313,13 @@ strace -c ls
 * ✅ Process exit information
 * ✅ Compatible output format with original strace
 
+## 📝 Related Articles
+
+Blog posts documenting the learning process and context behind this project:
+
+- 📝 [42 Piscine and Common Core: What I Learned](https://arthur-portfolio.com/en/blog/42-piscine-and-core-curriculum) — Reflections on 42 School's selection process and 2-year curriculum
+
+---
 ## Contact
 
 * **GitHub**: [@TuroTheReal](https://github.com/TuroTheReal)
