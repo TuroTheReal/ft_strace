@@ -12,6 +12,8 @@
 * [Program Architecture](#program-architecture)
 * [Testing](#testing)
 * [42 School Standards](#42-school-standards)
+* [Related Articles](#-related-articles)
+* [Contact](#contact)
 
 ## About
 
@@ -98,7 +100,7 @@ exit_group(0)                           = ?
 * **Syscall Number Mapping**: Converting syscall numbers to human-readable names across architectures
 * **Register Extraction**: Reading system call arguments from CPU registers (rdi, rsi, rdx, r10, r8, r9)
 * **Return Value Analysis**: Interpreting syscall return values and error codes (errno)
-* **Architecture-Specific Knowledge**: Understanding x86_64 syscall calling conventions
+* **Architecture-Specific Knowledge**: Understanding x86_64 and i386 syscall calling conventions
 
 ### Low-Level C Programming
 
@@ -121,7 +123,7 @@ exit_group(0)                           = ?
 * **Reverse Engineering Fundamentals**: Analyzing program behavior without source code access
 * **Low-Level Process Monitoring**: Implementing sophisticated process tracing mechanisms
 * **Security Analysis Skills**: Understanding techniques used in malware analysis and forensics
-* **Cross-Architecture Compatibility**: Writing portable code for different Linux architectures
+* **Cross-Architecture Compatibility**: Writing portable code for x86_64 and i386 Linux architectures
 * **Performance Debugging**: Identifying bottlenecks through syscall analysis
 
 ## Project Overview
@@ -131,19 +133,19 @@ The program uses ptrace to intercept every system call made by a target process,
 
 ### Core Components
 
-**Process Tracer Engine**: Uses ptrace(PTRACE_SYSCALL) to stop the traced process before and after each system call, capturing entry and exit points for complete syscall lifecycle monitoring.
+**Process Tracer Engine** (`src/tracer.c`): Uses ptrace(PTRACE_SYSCALL) to stop the traced process before and after each system call, capturing entry and exit points for complete syscall lifecycle monitoring.
 
-**Syscall Decoder**: Maintains comprehensive syscall number-to-name mappings for x86_64 architecture, translating raw syscall numbers (0-548+) into readable names like "read", "write", "open", etc.
+**Syscall Decoders** (`src/syscalls_64.c`, `src/syscalls_32.c`): Maintains comprehensive syscall number-to-name mappings for both x86_64 and i386 architectures, translating raw syscall numbers into readable names like "read", "write", "open", etc.
 
-**Register Reader**: Extracts syscall arguments from CPU registers using PTRACE_GETREGS, reading values from rax (syscall number), rdi, rsi, rdx, r10, r8, r9 (arguments), following x86_64 calling conventions.
+**Syscall Info Handler** (`src/syscall_info.c`, `src/syscall_args.c`): Extracts syscall arguments from CPU registers using PTRACE_GETREGS, reads values following the appropriate calling convention, and dispatches to the correct architecture table.
 
-**Argument Formatter**: Implements intelligent formatting for different argument types including integers, pointers, file descriptors, flags (O_RDONLY|O_CLOEXEC), structures, and arrays.
+**Argument Formatter** (`src/print.c`): Implements intelligent formatting for different argument types including integers, pointers, file descriptors, flags (O_RDONLY|O_CLOEXEC), structures, and arrays.
 
-**String Extractor**: Reads string arguments from traced process memory using PTRACE_PEEKDATA, reconstructing character-by-character for display with proper escaping and truncation.
+**Path Resolver** (`src/path.c`): Resolves command names to full executable paths by searching PATH, enabling usage of `./ft_strace ls` without typing the full `/bin/ls` path.
 
-**Return Value Analyzer**: Interprets syscall return values, identifies errors using errno, and displays human-readable error messages (ENOENT, EACCES, EINVAL, etc.).
+**Statistics Module** (`src/stats.c`): Collects and displays per-syscall statistics such as call counts and timing information when requested.
 
-**Signal Handler**: Detects signals delivered to traced process (SIGSEGV, SIGINT, SIGTERM), distinguishing between signals and syscall stops for accurate tracing.
+**Main Driver** (`src/main.c`): Parses command-line arguments, sets up the fork/ptrace workflow, coordinates the tracer and tracee, and handles final cleanup.
 
 ## Features Implemented
 
@@ -156,7 +158,7 @@ The program uses ptrace to intercept every system call made by a target process,
 
 ### Output Formatting
 
-* **Syscall Name Resolution**: Convert syscall numbers to names
+* **Syscall Name Resolution**: Convert syscall numbers to names (x86_64 and i386 tables)
 * **Argument Type Detection**: Format integers, pointers, strings appropriately
 * **Flag Decoding**: Display symbolic flag names (O_RDONLY, MAP_PRIVATE)
 * **Structure Display**: Show struct stat, timeval, etc. in readable format
@@ -178,12 +180,37 @@ The program uses ptrace to intercept every system call made by a target process,
 
 ### Advanced Features
 
-* **Multi-threaded Process Support**: Basic handling of threaded applications
+* **Dual Architecture Support**: Separate syscall tables for x86_64 (`syscalls_64.c`) and i386 (`syscalls_32.c`)
 * **File Descriptor Tracking**: Monitor fd creation and usage patterns
 * **Memory Operation Analysis**: Track mmap, brk, munmap operations
 * **Network Syscall Monitoring**: Display socket, bind, connect, send, recv calls
 
 ## Program Architecture
+
+### Project Structure
+
+```
+ft_strace/
+├── Makefile
+├── README.md
+├── en.subject.pdf
+├── compare.sh                  # Script to compare output with real strace
+├── diff.sh                     # Script to diff behaviors
+├── test_32.c                   # 32-bit test source
+├── test_32                     # Compiled 32-bit test binary
+├── header/
+│   └── ft_strace.h
+└── src/
+    ├── main.c                  # Entry point and fork/ptrace orchestration
+    ├── tracer.c                # Core ptrace loop and syscall stop handling
+    ├── syscall_info.c          # Syscall info dispatch
+    ├── syscall_args.c          # Register → argument extraction
+    ├── syscalls_64.c           # x86_64 syscall table
+    ├── syscalls_32.c           # i386 syscall table
+    ├── print.c                 # Argument / return value formatting
+    ├── path.c                  # PATH resolution for command names
+    └── stats.c                 # Per-syscall statistics
+```
 
 ### ptrace Workflow
 
@@ -191,15 +218,15 @@ The program follows a strict ptrace workflow: fork process, child calls PTRACE_T
 
 ### Syscall Table Architecture
 
-Maintains static syscall tables mapping x86_64 syscall numbers to names, supports common syscalls (read=0, write=1, open=2, close=3, etc.) up to modern syscalls (450+).
+Maintains two static syscall tables, one for x86_64 (`syscalls_64.c`) and one for i386 (`syscalls_32.c`), supporting common syscalls (read, write, open, close, etc.) up to modern ones.
 
 ### Register Reading Strategy
 
-Uses PTRACE_GETREGS to read entire register set, extracts syscall number from orig_rax register, reads arguments from standard argument registers (rdi through r9), captures return value from rax.
+Uses PTRACE_GETREGS to read entire register set, extracts syscall number from orig_rax (or orig_eax on i386) register, reads arguments from standard argument registers, captures return value from rax/eax.
 
 ### String Reconstruction
 
-Implements word-by-word memory reading using PTRACE_PEEKDATA (8 bytes per call), assembles characters into strings, handles null terminators and invalid memory gracefully, truncates at reasonable length (32-64 chars).
+Implements word-by-word memory reading using PTRACE_PEEKDATA (8 bytes per call on 64-bit), assembles characters into strings, handles null terminators and invalid memory gracefully, truncates at reasonable length (32-64 chars).
 
 ### State Machine Design
 
@@ -231,6 +258,16 @@ Tracks whether process is at syscall entry or exit using alternating flag, handl
 ./ft_strace /usr/bin/touch newfile.txt
 ```
 
+### 32-bit Binary Tests
+
+```bash
+# Compile the provided 32-bit test binary
+gcc -m32 -o test_32 test_32.c
+
+# Trace the 32-bit binary (exercises the i386 syscall table)
+./ft_strace ./test_32
+```
+
 ### Network Operation Tests
 
 ```bash
@@ -254,13 +291,13 @@ Tracks whether process is at syscall entry or exit using alternating flag, handl
 ### Comparison with Original strace
 
 ```bash
-# Compare outputs side by side
+# Use the provided comparison scripts
+./compare.sh <command>
+./diff.sh <command>
+
+# Manual side-by-side comparison
 strace ls 2>&1 | head -20
 ./ft_strace ls 2>&1 | head -20
-
-# Verify syscall counts
-strace -c ls
-./ft_strace ls  # Manual verification
 ```
 
 ### Edge Cases
@@ -299,7 +336,7 @@ strace -c ls
 ### System Programming Requirements
 
 * ✅ Understanding of ptrace API
-* ✅ Knowledge of x86_64 syscall conventions
+* ✅ Knowledge of x86_64 and i386 syscall conventions
 * ✅ Process state management
 * ✅ Signal handling during tracing
 * ✅ Memory reading from remote process
@@ -320,6 +357,7 @@ Blog posts documenting the learning process and context behind this project:
 - 📝 [42 Piscine and Common Core: What I Learned](https://arthur-portfolio.com/en/blog/42-piscine-and-core-curriculum) — Reflections on 42 School's selection process and 2-year curriculum
 
 ---
+
 ## Contact
 
 * **GitHub**: [@TuroTheReal](https://github.com/TuroTheReal)
