@@ -25,8 +25,8 @@ FT=./ft_strace     # binaire a tester
 PASS=0; FAIL=0     # compteurs de resultats
 
 # Helpers d'affichage
-ok()    { echo -e "  ${GREEN}[OK]${NC} $1";   PASS=$((PASS+1)); }
-ko()    { echo -e "  ${RED}[KO]${NC} $1";     FAIL=$((FAIL+1)); }
+ok()    { echo -e "  ${GREEN}[OK]${NC} $1";   PASS=$((PASS+1)); return 0; }
+ko()    { echo -e "  ${RED}[KO]${NC} $1";     FAIL=$((FAIL+1)); return 0; }
 skip()  { echo -e "  ${YELLOW}[SKIP]${NC} $1"; }
 title() { echo -e "\n${YELLOW}== $1 ==${NC}"; }
 
