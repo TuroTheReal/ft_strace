@@ -78,6 +78,7 @@ void		get_syscall_retval(t_tracer *tracer, t_syscall_info *info);
 void		print_syscall_enter(t_syscall_info *info, pid_t pid);
 void		print_syscall_exit(t_syscall_info *info);
 void		print_signal(pid_t pid, int sig);
+const char	*signal_name(int sig);
 const char	*get_syscall_name_64(long number);
 const char	*get_syscall_name_32(long number);
 int			get_syscall_arg_count(long number, int is_64bit);

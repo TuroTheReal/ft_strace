@@ -2,15 +2,47 @@
 
 #define AT_FDCWD -100
 
+// Nom court du signal ("SIGINT", "SIGSEGV"...) pour un affichage proche de strace
+const char *signal_name(int sig)
+{
+	switch (sig) {
+		case SIGHUP:   return "SIGHUP";
+		case SIGINT:   return "SIGINT";
+		case SIGQUIT:  return "SIGQUIT";
+		case SIGILL:   return "SIGILL";
+		case SIGTRAP:  return "SIGTRAP";
+		case SIGABRT:  return "SIGABRT";
+		case SIGBUS:   return "SIGBUS";
+		case SIGFPE:   return "SIGFPE";
+		case SIGKILL:  return "SIGKILL";
+		case SIGUSR1:  return "SIGUSR1";
+		case SIGSEGV:  return "SIGSEGV";
+		case SIGUSR2:  return "SIGUSR2";
+		case SIGPIPE:  return "SIGPIPE";
+		case SIGALRM:  return "SIGALRM";
+		case SIGTERM:  return "SIGTERM";
+		case SIGCHLD:  return "SIGCHLD";
+		case SIGCONT:  return "SIGCONT";
+		case SIGSTOP:  return "SIGSTOP";
+		case SIGTSTP:  return "SIGTSTP";
+		case SIGTTIN:  return "SIGTTIN";
+		case SIGTTOU:  return "SIGTTOU";
+		case SIGWINCH: return "SIGWINCH";
+		default:       return "SIG?";
+	}
+}
+
 void print_signal(pid_t pid, int sig)
 {
 	siginfo_t si;
 
+	// Vider stdout d'abord pour que le signal s'affiche apres la ligne de syscall
+	fflush(stdout);
 	if (ptrace(PTRACE_GETSIGINFO, pid, NULL, &si) == 0) {
-		fprintf(stderr, "--- %s {si_signo=%d, si_code=%d} ---\n",
-			strsignal(sig), si.si_signo, si.si_code);
+		fprintf(stderr, "--- %s {si_signo=%s, si_code=%d} ---\n",
+			signal_name(sig), signal_name(si.si_signo), si.si_code);
 	} else {
-		fprintf(stderr, "--- %s ---\n", strsignal(sig));
+		fprintf(stderr, "--- %s ---\n", signal_name(sig));
 	}
 }
 

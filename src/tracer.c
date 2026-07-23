@@ -52,15 +52,19 @@ void trace_loop(t_tracer *tracer)
 	struct iovec iov;
 	int first_syscall = 1;
 	int skip_count = 2;  // Skip read() et close() du pipe
+	int sig_to_deliver = 0;  // signal a relayer au processus au prochain resume
 
 	iov.iov_base = &tracer->regs;
 	iov.iov_len = sizeof(tracer->regs);
 
 	while (1) {
-		if (ptrace(PTRACE_SYSCALL, tracer->child_pid, NULL, NULL) == -1) {
+		// Relance le processus jusqu'au prochain syscall, en lui delivrant
+		// le signal eventuellement recu au tour precedent
+		if (ptrace(PTRACE_SYSCALL, tracer->child_pid, NULL, sig_to_deliver) == -1) {
 			perror("ptrace SYSCALL");
 			break;
 		}
+		sig_to_deliver = 0;
 
 		if (waitpid(tracer->child_pid, &status, 0) == -1) {
 			perror("waitpid");
@@ -78,6 +82,7 @@ void trace_loop(t_tracer *tracer)
 				}
 			}
 			if (!tracer->option_c) {
+				fflush(stdout);
 				fprintf(stderr, "+++ exited with %d +++\n", WEXITSTATUS(status));
 			}
 			break;
@@ -92,8 +97,9 @@ void trace_loop(t_tracer *tracer)
 				}
 			}
 			if (!tracer->option_c) {
-				fprintf(stderr, "+++ killed by SIG%s +++\n",
-					strsignal(WTERMSIG(status)));
+				fflush(stdout);
+				fprintf(stderr, "+++ killed by %s +++\n",
+					signal_name(WTERMSIG(status)));
 			}
 			break;
 		}
@@ -168,20 +174,18 @@ void trace_loop(t_tracer *tracer)
 					tracer->in_syscall = 0;
 				}
 			} else if (sig == SIGTRAP) {
-				// SIGTRAP normal
+				// SIGTRAP non lie a un syscall : rien a afficher
 			} else {
-				if (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU) {
-					if (ptrace(PTRACE_SYSCALL, tracer->child_pid, NULL, sig) == -1) {
-						perror("ptrace SYSCALL with signal");
-						break;
-					}
-					continue;
+				// Signal recu par le programme trace : l'afficher comme strace
+				if (!tracer->option_c) {
+					print_signal(tracer->child_pid, sig);
 				}
-				if (ptrace(PTRACE_SYSCALL, tracer->child_pid, NULL, sig) == -1) {
-					perror("ptrace SYSCALL with signal");
-					break;
+				// Le relayer au processus au prochain PTRACE_SYSCALL, sauf les
+				// signaux d'arret (sinon le processus bouclerait en group-stop)
+				if (sig != SIGSTOP && sig != SIGTSTP
+					&& sig != SIGTTIN && sig != SIGTTOU) {
+					sig_to_deliver = sig;
 				}
-				continue;
 			}
 		}
 	}
