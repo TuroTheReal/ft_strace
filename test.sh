@@ -42,10 +42,13 @@ if [ "$(uname -s)" != "Linux" ]; then
 fi
 
 title "0. Compilation"
-if make re >/dev/null 2>&1 && [ -x "$FT" ]; then
+# On capture la sortie du compilateur pour l'afficher SEULEMENT si make echoue
+if BUILD_LOG=$(make re 2>&1) && [ -x "$FT" ]; then
 	ok "make re produit ./ft_strace"
 else
-	ko "make re a echoue"; exit 1
+	ko "make re a echoue -- sortie du compilateur :"
+	echo "$BUILD_LOG" | sed 's/^/     /'
+	exit 1
 fi
 
 # ---------------------------------------------------------------------------
