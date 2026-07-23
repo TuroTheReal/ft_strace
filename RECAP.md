@@ -34,7 +34,7 @@ Comprendre `ptrace`, l'interface syscall (registres, numéros, ABI), les convent
 | `PTRACE_SYSCALL` | avancer syscall par syscall |
 | `PTRACE_GETREGSET` | lire les registres + détecter l'archi (taille du regset) |
 | `PTRACE_GETSIGINFO` | détails du signal reçu |
-| `PTRACE_SETOPTIONS` (via SEIZE) | `TRACESYSGOOD` (marque les syscall-stops), `EXITKILL` |
+| SIGTRAP + alternance `in_syscall` | distinguer entrée/sortie de syscall sans `TRACESYSGOOD` (define non autorisé) |
 | `/proc/PID/mem` | lire les chaînes du process tracé (car `PEEKDATA` interdit) |
 | `waitpid` + macros `WIF*` | savoir pourquoi le process s'est arrêté |
 

@@ -215,9 +215,9 @@ ft_strace/
 
 ### ptrace Workflow
 
-The program follows the ptrace workflow imposed by the subject (**PTRACE_TRACEME is not allowed**): the parent forks a child that blocks on a pipe; the parent attaches with **PTRACE_SEIZE**, synchronises with **PTRACE_INTERRUPT** / **PTRACE_LISTEN**, then releases the child so it can execve. It then single-steps through syscalls with **PTRACE_SYSCALL**, stopping at entry and exit (PTRACE_O_TRACESYSGOOD flags syscall-stops).
+The program follows the ptrace workflow imposed by the subject (**PTRACE_TRACEME is not allowed**): the parent forks a child that blocks on a pipe; the parent attaches with **PTRACE_SEIZE**, synchronises with **PTRACE_INTERRUPT** / **PTRACE_LISTEN**, then releases the child so it can execve. It then single-steps through syscalls with **PTRACE_SYSCALL**, stopping at entry and exit. Syscall-stops arrive as a plain SIGTRAP and entry/exit are told apart by an alternating flag (PTRACE_O_TRACESYSGOOD is deliberately not used; PTRACE_SEIZE avoids the extra post-execve SIGTRAP).
 
-**Allowed ptrace requests (subject constraint):** PTRACE_SYSCALL, PTRACE_GETREGSET, PTRACE_SETOPTIONS, PTRACE_GETSIGINFO, PTRACE_SEIZE, PTRACE_INTERRUPT, PTRACE_LISTEN. No other request is used (in particular no TRACEME, ATTACH, CONT, PEEKDATA or GETREGS).
+**Allowed ptrace requests (subject constraint):** PTRACE_SYSCALL, PTRACE_GETREGSET, PTRACE_SETOPTIONS, PTRACE_GETSIGINFO, PTRACE_SEIZE, PTRACE_INTERRUPT, PTRACE_LISTEN. The implementation uses only SEIZE, INTERRUPT, LISTEN, SYSCALL, GETREGSET and GETSIGINFO, and **no PTRACE_O_\* option** (no TRACESYSGOOD/EXITKILL, no TRACEME, ATTACH, CONT, PEEKDATA or GETREGS).
 
 ### Syscall Table Architecture
 

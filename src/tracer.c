@@ -112,8 +112,10 @@ void trace_loop(t_tracer *tracer)
 		if (WIFSTOPPED(status)) {
 			int sig = WSTOPSIG(status);
 
-			// Arret sur un syscall (entree/sortie), signale par TRACESYSGOOD
-			if (sig == (SIGTRAP | 0x80)) {
+			// Sans TRACESYSGOOD (define non autorise), un arret sur syscall arrive
+			// en SIGTRAP simple ; l'alternance in_syscall distingue entree/sortie.
+			// PTRACE_SEIZE evite le SIGTRAP supplementaire post-execve.
+			if (sig == SIGTRAP) {
 				iov.iov_len = sizeof(tracer->regs);
 				if (ptrace(PTRACE_GETREGSET, tracer->child_pid,
 						  NT_PRSTATUS, &iov) == -1) {
@@ -179,8 +181,6 @@ void trace_loop(t_tracer *tracer)
 
 					tracer->in_syscall = 0;
 				}
-			} else if (sig == SIGTRAP) {
-				// SIGTRAP non lie a un syscall : rien a afficher
 			} else {
 				// Signal recu par le programme trace : l'afficher comme strace
 				if (!tracer->option_c) {
@@ -260,9 +260,9 @@ int start_trace(char **argv, char **envp, int option_c)
 	// Petit délai pour que l'enfant soit bloqué sur read()
 	usleep(1000);
 
-	// PTRACE_SEIZE avec les options
-	if (ptrace(PTRACE_SEIZE, tracer.child_pid, NULL,
-			   PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) == -1) {
+	// PTRACE_SEIZE sans aucune option : le sujet n'autorise que les 7 requetes
+	// ptrace, aucun define PTRACE_O_* (ni TRACESYSGOOD ni EXITKILL)
+	if (ptrace(PTRACE_SEIZE, tracer.child_pid, NULL, 0) == -1) {
 		perror("ptrace SEIZE");
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
