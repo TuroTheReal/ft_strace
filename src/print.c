@@ -32,6 +32,7 @@ const char *signal_name(int sig)
 	}
 }
 
+// Affiche un signal recu par le processus trace, facon strace (--- SIGxxx ... ---)
 void print_signal(pid_t pid, int sig)
 {
 	siginfo_t si;
@@ -463,6 +464,7 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 	}
 }
 
+// Affiche le nom du syscall et ses arguments (avant son execution)
 void print_syscall_enter(t_syscall_info *info, pid_t pid)
 {
 	if (info->name == NULL) {
@@ -518,6 +520,7 @@ static const char *errno_to_name(int err)
 	}
 }
 
+// Affiche la valeur de retour du syscall (ou -1 ERRNO en cas d'erreur)
 void print_syscall_exit(t_syscall_info *info)
 {
 	printf(") = ");

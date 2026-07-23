@@ -1,5 +1,6 @@
 #include "ft_strace.h"
 
+// Renvoie combien d'arguments afficher pour un syscall (evite d'afficher du bruit)
 int get_syscall_arg_count(long number, int is_64bit)
 {
 	if (is_64bit) {

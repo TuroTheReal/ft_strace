@@ -1,5 +1,6 @@
 #include "ft_strace.h"
 
+// Alloue le tableau de statistiques (bonus -c)
 void init_stats(t_tracer *tracer)
 {
 	tracer->stats_capacity = 512;
@@ -7,6 +8,7 @@ void init_stats(t_tracer *tracer)
 	tracer->stats = calloc(tracer->stats_capacity, sizeof(t_syscall_stats));
 }
 
+// Met a jour les stats d'un syscall : nombre d'appels, temps total, erreurs
 void update_stats(t_tracer *tracer, t_syscall_info *info)
 {
 	int i;
@@ -41,6 +43,7 @@ void update_stats(t_tracer *tracer, t_syscall_info *info)
 	tracer->stats_count++;
 }
 
+// Tri decroissant par temps total (pour l'ordre d'affichage de -c)
 int compare_stats(const void *a, const void *b)
 {
 	const t_syscall_stats *sa = (const t_syscall_stats *)a;
@@ -53,6 +56,7 @@ int compare_stats(const void *a, const void *b)
 	return 0;
 }
 
+// Affiche le tableau recapitulatif final, facon 'strace -c'
 void print_stats(t_tracer *tracer)
 {
 	int i;
@@ -97,6 +101,7 @@ void print_stats(t_tracer *tracer)
 			total_time, total_calls, total_errors);
 }
 
+// Libere le tableau de statistiques
 void free_stats(t_tracer *tracer)
 {
 	if (tracer->stats) {

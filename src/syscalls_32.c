@@ -361,6 +361,7 @@ static const char *syscall_table_32[] = {
 
 #define SYSCALL_TABLE_32_SIZE (sizeof(syscall_table_32) / sizeof(syscall_table_32[0]))
 
+// Renvoie le nom du syscall i386 (32 bits) a partir de son numero (NULL si inconnu)
 const char *get_syscall_name_32(long number)
 {
 	if (number < 0 || number >= (long int)SYSCALL_TABLE_32_SIZE)

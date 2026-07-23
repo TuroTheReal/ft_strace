@@ -361,6 +361,7 @@ static const char *syscall_table_64[] = {
 
 #define SYSCALL_TABLE_64_SIZE (sizeof(syscall_table_64) / sizeof(syscall_table_64[0]))
 
+// Renvoie le nom du syscall x86_64 a partir de son numero (NULL si inconnu)
 const char *get_syscall_name_64(long number)
 {
 	if (number < 0 || number >= (long int)SYSCALL_TABLE_64_SIZE)

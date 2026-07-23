@@ -1,7 +1,9 @@
 #include "ft_strace.h"
 
+// Etat global minimal pour nettoyer si le tracer est interrompu par un signal
 static t_cleanup g_cleanup = {-1, -1, NULL};
 
+// Le tracer recoit SIGINT/SIGTERM : on tue l'enfant, on libere, on quitte
 static void signal_handler(int sig)
 {
 	(void)sig;
@@ -14,6 +16,7 @@ static void signal_handler(int sig)
 	_exit(128 + sig);
 }
 
+// Libere une ressource et remet l'etat global de nettoyage a zero
 void cleanup(char *str)
 {
 	if (str)
@@ -23,6 +26,7 @@ void cleanup(char *str)
 	g_cleanup.path_resolved = NULL;
 }
 
+// Detecte 32 ou 64 bits via le registre cs du processus trace (0x23 / 0x33)
 int detect_architecture(pid_t pid)
 {
 	struct iovec iov;
@@ -45,6 +49,7 @@ int detect_architecture(pid_t pid)
 	return -1;
 }
 
+// Boucle principale : avance syscall par syscall et affiche chaque appel et signal
 void trace_loop(t_tracer *tracer)
 {
 	int status;
@@ -107,6 +112,7 @@ void trace_loop(t_tracer *tracer)
 		if (WIFSTOPPED(status)) {
 			int sig = WSTOPSIG(status);
 
+			// Arret sur un syscall (entree/sortie), signale par TRACESYSGOOD
 			if (sig == (SIGTRAP | 0x80)) {
 				iov.iov_len = sizeof(tracer->regs);
 				if (ptrace(PTRACE_GETREGSET, tracer->child_pid,
@@ -191,6 +197,7 @@ void trace_loop(t_tracer *tracer)
 	}
 }
 
+// Prepare l'enfant (fork + pipe), s'y attache avec SEIZE, puis lance la boucle
 int start_trace(char **argv, char **envp, int option_c)
 {
 	t_tracer tracer;

@@ -1,5 +1,6 @@
 #include "ft_strace.h"
 
+// Cherche la commande dans les repertoires de $PATH, renvoie le chemin complet (bonus PATH)
 char *find_in_path(const char *cmd)
 {
 	char *path_env;

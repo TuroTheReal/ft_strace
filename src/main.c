@@ -1,5 +1,6 @@
 #include "ft_strace.h"
 
+// Affiche l'aide d'utilisation (en cas d'arguments manquants/invalides)
 void print_usage(void)
 {
 	fprintf(stderr, "Usage: ft_strace [-c] command [args...]\n");
@@ -8,6 +9,7 @@ void print_usage(void)
 	fprintf(stderr, "Example: ./ft_strace -c /bin/ls\n");
 }
 
+// Point d'entree : lit l'option -c puis lance la trace sur la commande donnee
 int main(int argc, char **argv, char **envp)
 {
 	int option_c = 0;

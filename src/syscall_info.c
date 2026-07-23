@@ -1,5 +1,6 @@
 #include "ft_strace.h"
 
+// Recupere numero, nom et arguments du syscall depuis les registres (64 ou 32 bits)
 void get_syscall_info(t_tracer *tracer, t_syscall_info *info)
 {
 	if (tracer->is_64bit) {
@@ -28,6 +29,7 @@ void get_syscall_info(t_tracer *tracer, t_syscall_info *info)
 	info->arg_count = get_syscall_arg_count(info->number, tracer->is_64bit);
 }
 
+// Recupere la valeur de retour du syscall (avec extension de signe sur 32 bits)
 void get_syscall_retval(t_tracer *tracer, t_syscall_info *info)
 {
 	if (tracer->is_64bit) {
