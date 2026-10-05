@@ -91,7 +91,7 @@ exit_group(0)                           = ?
 ### Process Control and Debugging
 
 * **ptrace System Call**: Mastering Linux's process tracing mechanism for debugging and monitoring
-* **Process State Management**: Understanding PTRACE_TRACEME, PTRACE_SYSCALL, PTRACE_GETREGS
+* **Process State Management**: Understanding PTRACE_SEIZE, PTRACE_INTERRUPT, PTRACE_LISTEN, PTRACE_SYSCALL, PTRACE_GETREGSET
 * **Signal Handling**: Intercepting and analyzing signals sent to traced processes
 * **Parent-Child Process Coordination**: Managing tracer/tracee relationship with fork()
 
@@ -106,7 +106,7 @@ exit_group(0)                           = ?
 
 * **Binary Data Structures**: Working with user_regs_struct and ptrace register access
 * **Memory Layout**: Understanding process memory, stack, heap, and register organization
-* **Pointer Manipulation**: Reading traced process memory with PTRACE_PEEKDATA
+* **Pointer Manipulation**: Reading traced process memory through `/proc/<pid>/mem`
 * **String Handling**: Reconstructing strings and data from remote process memory
 
 ### Operating System Internals
@@ -137,7 +137,7 @@ The program uses ptrace to intercept every system call made by a target process,
 
 **Syscall Decoders** (`src/syscalls_64.c`, `src/syscalls_32.c`): Maintains comprehensive syscall number-to-name mappings for both x86_64 and i386 architectures, translating raw syscall numbers into readable names like "read", "write", "open", etc.
 
-**Syscall Info Handler** (`src/syscall_info.c`, `src/syscall_args.c`): Extracts syscall arguments from CPU registers using PTRACE_GETREGS, reads values following the appropriate calling convention, and dispatches to the correct architecture table.
+**Syscall Info Handler** (`src/syscall_info.c`, `src/syscall_args.c`): Extracts syscall arguments from CPU registers using PTRACE_GETREGSET (`NT_PRSTATUS`), reads values following the appropriate calling convention, and dispatches to the correct architecture table.
 
 **Argument Formatter** (`src/print.c`): Implements intelligent formatting for different argument types including integers, pointers, file descriptors, flags (O_RDONLY|O_CLOEXEC), structures, and arrays.
 
@@ -214,7 +214,9 @@ ft_strace/
 
 ### ptrace Workflow
 
-The program follows a strict ptrace workflow: fork process, child calls PTRACE_TRACEME and execve, parent waits for child, uses PTRACE_SYSCALL to single-step through syscalls, stopping at entry and exit.
+The program follows a strict ptrace workflow: fork; the child blocks on a pipe read before `execve`; the parent attaches with PTRACE_SEIZE (options `PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL`), stops it with PTRACE_INTERRUPT, releases the pipe, resumes it with PTRACE_LISTEN, interrupts it again just before `execve`, then uses PTRACE_SYSCALL to stop at each syscall entry and exit.
+
+PTRACE_TRACEME is not used: the subject only allows PTRACE_SYSCALL, PTRACE_GETREGSET, PTRACE_SETOPTIONS, PTRACE_GETSIGINFO, PTRACE_SEIZE, PTRACE_INTERRUPT and PTRACE_LISTEN.
 
 ### Syscall Table Architecture
 
@@ -222,11 +224,11 @@ Maintains two static syscall tables, one for x86_64 (`syscalls_64.c`) and one fo
 
 ### Register Reading Strategy
 
-Uses PTRACE_GETREGS to read entire register set, extracts syscall number from orig_rax (or orig_eax on i386) register, reads arguments from standard argument registers, captures return value from rax/eax.
+Uses PTRACE_GETREGSET with `NT_PRSTATUS` to read the entire register set, detects the architecture from the CS segment register (`0x33` = 64-bit, `0x23` = 32-bit), extracts syscall number from orig_rax (or orig_eax on i386) register, reads arguments from standard argument registers, captures return value from rax/eax.
 
 ### String Reconstruction
 
-Implements word-by-word memory reading using PTRACE_PEEKDATA (8 bytes per call on 64-bit), assembles characters into strings, handles null terminators and invalid memory gracefully, truncates at reasonable length (32-64 chars).
+Reads the traced process memory through `/proc/<pid>/mem` (`lseek` + `read`), assembles characters into strings, handles null terminators and invalid memory gracefully, truncates at reasonable length (32-64 chars).
 
 ### State Machine Design
 
@@ -327,7 +329,7 @@ strace ls 2>&1 | head -20
 ### Technical Requirements
 
 * ✅ Fork and ptrace process control
-* ✅ Register reading with PTRACE_GETREGS
+* ✅ Register reading with PTRACE_GETREGSET
 * ✅ Syscall entry/exit detection
 * ✅ Argument extraction from registers
 * ✅ Return value and error code display
