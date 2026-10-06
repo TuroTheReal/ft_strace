@@ -1,12 +1,10 @@
 #!/bin/bash
 
-# Script de comparaison multiple ft_strace vs strace
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Fonction de comparaison
 compare_test() {
     local name="$1"
     shift
@@ -30,26 +28,25 @@ if [ $# -gt 0 ]; then
     exit 0
 fi
 
-# Sinon, tests automatiques
-# Test 1: Binaire 64-bit
+# Sinon, tests auto
+# 64-bit
 compare_test "Binaire 64-bit" /bin/echo "Hello 42"
 
-# Test 2: Commande avec arguments
+# Commande avec arg
 compare_test "Commande avec args" /bin/ls -l /tmp
 
-
-# Test 4: Binaire 32-bit (test compilé)
+# 32-bit
 if [ -f "./test_32" ]; then
     compare_test "Test binaire 32-bit" ./test_32
 fi
 
-# Test 5: Commande avec redirection
+# redirection
 compare_test "Cat fichier" /bin/cat /etc/hostname
 
-# Test 6: Commande rapide
+# rapide
 compare_test "True (exit rapide)" /bin/true
 
-# Test 7: PWD
+# PWD
 compare_test "PWD" /bin/pwd
 
 echo -e "\n${GREEN}✓ Tests terminés${NC}"

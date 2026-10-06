@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# Script de comparaison ft_strace vs strace
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -18,11 +17,11 @@ REAL_OUT=$(strace $CMD 2>&1 | head -15)
 echo -e "${GREEN}FT_STRACE${NC} │ ${YELLOW}STRACE (original)${NC}"
 echo "──────────────────────────────────────────────────────│──────────────────────────────────────────────────────"
 
-# Sauvegarder dans des fichiers temporaires
+# save -> fichiers tmp
 echo "$FT_OUT" > /tmp/ft.txt
 echo "$REAL_OUT" > /tmp/real.txt
 
-# Afficher ligne par ligne avec numérotation
+# ligne par ligne + it
 paste <(cat /tmp/ft.txt | nl -w2 -s': ') <(cat /tmp/real.txt | nl -w2 -s': ') | \
     awk -F'\t' '{printf "%-54s │ %s\n", $1, $2}'
 
