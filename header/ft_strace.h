@@ -7,6 +7,7 @@
 #include <sys/user.h>
 #include <sys/reg.h>
 #include <sys/uio.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +19,7 @@
 #include <sys/time.h>
 #include <fcntl.h>
 
-// Structure pour les registres 32-bit (i386)
+// Structure registres 32-bit (i386)
 struct user_regs_struct_i386 {
 	uint32_t ebx, ecx, edx, esi, edi, ebp, eax;
 	uint16_t ds, __ds, es, __es;
@@ -71,13 +72,14 @@ typedef struct s_tracer {
 
 // Prototypes
 int			start_trace(char **argv, char **envp, int option_c);
-void		trace_loop(t_tracer *tracer);
-int			detect_architecture(pid_t pid);
+int			trace_loop(t_tracer *tracer);
 void		get_syscall_info(t_tracer *tracer, t_syscall_info *info);
 void		get_syscall_retval(t_tracer *tracer, t_syscall_info *info);
 void		print_syscall_enter(t_syscall_info *info, pid_t pid);
-void		print_syscall_exit(t_syscall_info *info);
+void		print_syscall_exit(t_syscall_info *info, pid_t pid);
+void		print_syscall_unfinished(void);
 void		print_signal(pid_t pid, int sig);
+const char	*signal_name(int sig);
 const char	*get_syscall_name_64(long number);
 const char	*get_syscall_name_32(long number);
 int			get_syscall_arg_count(long number, int is_64bit);
