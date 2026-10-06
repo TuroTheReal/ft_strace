@@ -1,10 +1,11 @@
 #include "ft_strace.h"
 
-void init_stats(t_tracer *tracer)
+int init_stats(t_tracer *tracer)
 {
 	tracer->stats_capacity = 512;
 	tracer->stats_count = 0;
 	tracer->stats = calloc(tracer->stats_capacity, sizeof(t_syscall_stats));
+	return tracer->stats ? 0 : -1;
 }
 
 void update_stats(t_tracer *tracer, t_syscall_info *info)
@@ -28,9 +29,18 @@ void update_stats(t_tracer *tracer, t_syscall_info *info)
 	}
 
 	if (tracer->stats_count >= tracer->stats_capacity) {
+		// Pointeur temporaire: si realloc échoue, l'ancien tableau reste valide
+		t_syscall_stats *tmp = realloc(tracer->stats,
+				tracer->stats_capacity * 2 * sizeof(t_syscall_stats));
+		if (!tmp) {
+			static int warned = 0;
+			if (!warned)
+				fprintf(stderr, "ft_strace: out of memory, statistics incomplete\n");
+			warned = 1;
+			return;
+		}
+		tracer->stats = tmp;
 		tracer->stats_capacity *= 2;
-		tracer->stats = realloc(tracer->stats,
-								tracer->stats_capacity * sizeof(t_syscall_stats));
 	}
 
 	tracer->stats[tracer->stats_count].name = name;

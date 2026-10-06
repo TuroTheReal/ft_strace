@@ -1,46 +1,55 @@
 #include "ft_strace.h"
 
-char *find_in_path(const char *cmd)
+// Construit "dir/cmd". Entrée vide du PATH = dossier courant (comme execvp et strace)
+static char *join_path(const char *dir, size_t dir_len, const char *cmd)
 {
-	char *path_env;
-	char *path_copy;
-	char *dir;
+	char cwd[4096];
 	char *full_path;
 	size_t len;
+
+	if (dir_len == 0) {
+		if (!getcwd(cwd, sizeof(cwd)))
+			return NULL;
+		dir = cwd;
+		dir_len = strlen(cwd);
+	}
+	len = dir_len + strlen(cmd) + 2;
+	full_path = malloc(len);
+	if (!full_path)
+		return NULL;
+	snprintf(full_path, len, "%.*s/%s", (int)dir_len, dir, cmd);
+	return full_path;
+}
+
+char *find_in_path(const char *cmd)
+{
+	const char *dir;
+	const char *end;
+	char *full_path;
 	struct stat st;
 
 	if (!cmd[0])
 		return NULL;
-	path_env = getenv("PATH");
-	if (!path_env)
+	dir = getenv("PATH");
+	if (!dir)
 		return NULL;
 
-	path_copy = strdup(path_env);
-	if (!path_copy)
-		return NULL;
+	// Découpage manuel: strtok sauterait les entrées vides ("::" ou ":" en bord)
+	while (1) {
+		end = strchr(dir, ':');
+		if (!end)
+			end = dir + strlen(dir);
 
-	dir = strtok(path_copy, ":");
-	while (dir) {
-		len = strlen(dir) + strlen(cmd) + 2;
-		full_path = malloc(len);
-		if (!full_path) {
-			free(path_copy);
-			return NULL;
-		}
-
-		snprintf(full_path, len, "%s/%s", dir, cmd);
-
+		full_path = join_path(dir, (size_t)(end - dir), cmd);
 		// Un dossier est aussi "exécutable" (X_OK): on exige un fichier régulier
-		if (access(full_path, X_OK) == 0 && stat(full_path, &st) == 0
-			&& S_ISREG(st.st_mode)) {
-			free(path_copy);
+		if (full_path && access(full_path, X_OK) == 0 && stat(full_path, &st) == 0
+			&& S_ISREG(st.st_mode))
 			return full_path;
-		}
-
 		free(full_path);
-		dir = strtok(NULL, ":");
-	}
 
-	free(path_copy);
+		if (*end == '\0')
+			break;
+		dir = end + 1;
+	}
 	return NULL;
 }

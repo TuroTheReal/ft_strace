@@ -19,7 +19,7 @@ HEADER = $(addprefix $(HEADER_FOLD), $(HEADER_FLS))
 C_FLS = $(addsuffix .c, $(C_SRC))
 SRC = $(addprefix $(SRC_FOLD), $(C_FLS))
 OBJ = $(addprefix $(OBJ_DEP_DIR), $(SRC:.c=.o))
-DEP = $(addprefix $(OBJ_DEP_DIR), $(OBJ:.o=.d))
+DEP = $(OBJ:.o=.d)
 
 OBJF = .cache_exists
 
@@ -51,13 +51,12 @@ clean:
 	@echo "$(VIOLET)Suppressing objects & dependencies files of $(NAME).$(RESET)"
 
 fclean: clean
-	@$(RM) $(NAME) $(NAME_BONUS)
+	@$(RM) $(NAME)
 	@echo "$(VERT)Suppressing archives $(NAME).$(RESET)"
 
 re: fclean all
 
 -include $(DEP)
--include $(DEP_BONUS)
 
 .PHONY: re fclean clean all
 

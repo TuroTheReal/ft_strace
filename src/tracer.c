@@ -2,15 +2,22 @@
 
 static t_cleanup g_cleanup = {-1, -1, NULL};
 
+// Uniquement des fonctions async-signal-safe (write, close, kill, _exit).
+// Le détachement ne fait pas partie des requêtes autorisées: on ne peut pas
+// relâcher le tracee comme strace, on le tue.
 static void signal_handler(int sig)
 {
-	(void)sig;
+	static const char unfinished[] = " <unfinished ...>\n";
+
+	if (g_line_open) {
+		// Rien à faire si l'écriture échoue: on quitte de toute façon
+		ssize_t ret = write(STDERR_FILENO, unfinished, sizeof(unfinished) - 1);
+		(void)ret;
+	}
 	if (g_cleanup.pipe_fd != -1)
 		close(g_cleanup.pipe_fd);
 	if (g_cleanup.child_pid > 0)
 		kill(g_cleanup.child_pid, SIGKILL);
-	if (g_cleanup.path_resolved)
-		free(g_cleanup.path_resolved);
 	_exit(128 + sig);
 }
 
@@ -56,15 +63,8 @@ int trace_loop(t_tracer *tracer)
 
 		if (WIFEXITED(status) || WIFSIGNALED(status)) {
 			// Syscall en cours sans retour (exit_group, SIGKILL...)
-			if (tracer->in_syscall && started) {
-				if (!tracer->option_c) {
-					print_syscall_unfinished();
-				} else {
-					// strace -c compte aussi exit_group
-					gettimeofday(&tracer->current_syscall.end_time, NULL);
-					update_stats(tracer, &tracer->current_syscall);
-				}
-			}
+			if (tracer->in_syscall && started && !tracer->option_c)
+				print_syscall_unfinished();
 			if (WIFEXITED(status)) {
 				exit_code = WEXITSTATUS(status);
 				if (!tracer->option_c)
@@ -203,22 +203,24 @@ int start_trace(char **argv, char **envp, int option_c)
 		}
 	}
 
-	if (option_c) {
-		init_stats(&tracer);
+	if (option_c && init_stats(&tracer) == -1) {
+		perror("ft_strace: calloc");
+		free(path_resolved);
+		return 1;
 	}
 
 	if (pipe(pipefd) == -1) {
 		perror("pipe");
-		if (path_resolved)
-			free(path_resolved);
+		free(path_resolved);
+		free_stats(&tracer);
 		return 1;
 	}
 
 	tracer.child_pid = fork();
 	if (tracer.child_pid == -1) {
 		perror("fork");
-		if (path_resolved)
-			free(path_resolved);
+		free(path_resolved);
+		free_stats(&tracer);
 		close(pipefd[0]);
 		close(pipefd[1]);
 		return 1;
@@ -228,7 +230,9 @@ int start_trace(char **argv, char **envp, int option_c)
 		// Enfant: attendre signal du parent puis execve
 		char c;
 		close(pipefd[1]);
-		read(pipefd[0], &c, 1);
+		// read != 1: le parent est mort avant de nous tracer, ne pas exec sans trace
+		if (read(pipefd[0], &c, 1) != 1)
+			_exit(1);
 		close(pipefd[0]);
 
 		// argv[0] reste tel que tapé (comme strace), seul le chemin exécuté change
@@ -245,6 +249,8 @@ int start_trace(char **argv, char **envp, int option_c)
 
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
+	signal(SIGHUP, signal_handler);
+	signal(SIGQUIT, signal_handler);
 
 	// L'enfant est bloqué sur read() du pipe tant qu'on n'écrit pas:
 	// il ne peut pas faire execve avant d'être tracé, sans aucune hypothèse de timing
@@ -255,6 +261,7 @@ int start_trace(char **argv, char **envp, int option_c)
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
 		cleanup(path_resolved);
+		free_stats(&tracer);
 		return 1;
 	}
 
@@ -264,6 +271,7 @@ int start_trace(char **argv, char **envp, int option_c)
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
 		cleanup(path_resolved);
+		free_stats(&tracer);
 		return 1;
 	}
 
@@ -273,11 +281,19 @@ int start_trace(char **argv, char **envp, int option_c)
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
 		cleanup(path_resolved);
+		free_stats(&tracer);
 		return 1;
 	}
 
 	// Débloquer le read() et fermer le pipe, la boucle prend le relais
-	write(pipefd[1], "x", 1);
+	if (write(pipefd[1], "x", 1) != 1) {
+		perror("write");
+		close(pipefd[1]);
+		kill(tracer.child_pid, SIGKILL);
+		cleanup(path_resolved);
+		free_stats(&tracer);
+		return 1;
+	}
 	close(pipefd[1]);
 	g_cleanup.pipe_fd = -1;
 
@@ -287,6 +303,8 @@ int start_trace(char **argv, char **envp, int option_c)
 	g_cleanup.path_resolved = NULL;
 	signal(SIGINT, SIG_DFL);
 	signal(SIGTERM, SIG_DFL);
+	signal(SIGHUP, SIG_DFL);
+	signal(SIGQUIT, SIG_DFL);
 
 	if (option_c) {
 		print_stats(&tracer);

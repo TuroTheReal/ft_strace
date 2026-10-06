@@ -70,6 +70,9 @@ typedef struct s_tracer {
 	t_syscall_info current_syscall;
 } t_tracer;
 
+// Une ligne de trace est en cours (entrée affichée, pas encore la sortie)
+extern volatile sig_atomic_t g_line_open;
+
 // Prototypes
 int			start_trace(char **argv, char **envp, int option_c);
 int			trace_loop(t_tracer *tracer);
@@ -83,7 +86,7 @@ const char	*signal_name(int sig);
 const char	*get_syscall_name_64(long number);
 const char	*get_syscall_name_32(long number);
 int			get_syscall_arg_count(long number, int is_64bit);
-void		init_stats(t_tracer *tracer);
+int			init_stats(t_tracer *tracer);
 void		update_stats(t_tracer *tracer, t_syscall_info *info);
 void		print_stats(t_tracer *tracer);
 void		free_stats(t_tracer *tracer);

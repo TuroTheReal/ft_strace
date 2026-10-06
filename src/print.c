@@ -22,6 +22,8 @@ typedef struct s_flag {
 // Colonne courante de la ligne de trace, pour aligner le " = "
 static int g_col = 0;
 
+volatile sig_atomic_t g_line_open = 0;
+
 static void out(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 static void out(const char *fmt, ...)
@@ -126,7 +128,7 @@ void print_signal(pid_t pid, int sig)
 /*                         LECTURE MÉMOIRE DU TRACEE                          */
 /* ************************************************************************** */
 
-// PTRACE_PEEKDATA est interdit: on lit /proc/PID/mem (autorisé car on est le tracer)
+// La lecture mémoire via ptrace est interdite: on lit /proc/PID/mem (autorisé car on est le tracer)
 // Retourne le nombre d'octets lus (peut être partiel en bord de mapping) ou -1
 static ssize_t read_mem(pid_t pid, unsigned long long addr, void *buf, size_t len)
 {
@@ -178,7 +180,7 @@ static void print_quoted(const unsigned char *s, size_t len, int hex)
 // Buffer de taille connue (read, write...): MAX_STRLEN octets max puis "..."
 static void print_buffer(pid_t pid, unsigned long long addr, unsigned long long len, int hex)
 {
-	unsigned char buf[MAX_STRLEN];
+	unsigned char buf[MAX_STRLEN] = {0};
 	size_t n = len > MAX_STRLEN ? MAX_STRLEN : len;
 
 	if (!addr) {
@@ -1176,6 +1178,7 @@ void print_syscall_enter(t_syscall_info *info, pid_t pid)
 	}
 
 	print_syscall_args(info, pid);
+	g_line_open = 1;
 }
 
 /* ************************************************************************** */
@@ -1235,6 +1238,7 @@ void print_syscall_unfinished(void)
 {
 	print_ret_separator();
 	out("?\n");
+	g_line_open = 0;
 }
 
 void print_syscall_exit(t_syscall_info *info, pid_t pid)
@@ -1245,6 +1249,7 @@ void print_syscall_exit(t_syscall_info *info, pid_t pid)
 	if (is_deferred(id))
 		print_deferred_args(info, pid);
 	print_ret_separator();
+	g_line_open = 0;  // le "\n" final suit dans tous les cas
 
 	if (ret < 0 && ret >= -4095) {
 		int err = (int)-ret;
