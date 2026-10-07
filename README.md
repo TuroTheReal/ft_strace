@@ -143,7 +143,7 @@ The program uses ptrace to intercept every system call made by a target process,
 
 **Path Resolver** (`src/path.c`): Resolves command names to full executable paths by searching PATH, enabling usage of `./ft_strace ls` without typing the full `/bin/ls` path.
 
-**Statistics Module** (`src/stats.c`): Collects and displays per-syscall statistics such as call counts and timing information when requested.
+**Statistics Module** (`src/stats.c`): Collects and displays per-syscall statistics (time, calls, errors) with `-c`. Time is the wall-clock duration between the entry and exit stops of each syscall, like `strace -c -w`; default strace reports kernel CPU time instead.
 
 **Main Driver** (`src/main.c`): Parses command-line arguments, sets up the fork/ptrace workflow, coordinates the tracer and tracee, and handles final cleanup.
 
@@ -214,7 +214,7 @@ ft_strace/
 
 ### ptrace Workflow
 
-The program follows a strict ptrace workflow: fork; the child blocks on a pipe read before `execve`; the parent attaches with PTRACE_SEIZE (options `PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL`), stops it with PTRACE_INTERRUPT, releases the pipe, resumes it with PTRACE_LISTEN, interrupts it again just before `execve`, then uses PTRACE_SYSCALL to stop at each syscall entry and exit.
+The program follows a strict ptrace workflow: fork; the child blocks on a pipe read before `execve`; the parent attaches with PTRACE_SEIZE (options `PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL`), stops it with PTRACE_INTERRUPT, releases the pipe, then uses PTRACE_SYSCALL to stop at each syscall entry and exit. The pipe guarantees the child cannot reach `execve` before being attached, with no timing assumption. Nothing is printed before the first `execve` entry, and entry/exit stops are told apart with `rax == -ENOSYS` (set by the kernel on every syscall entry) until then. PTRACE_LISTEN keeps the tracee stopped during a group-stop (SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU), and every intercepted signal is re-injected with the next PTRACE_SYSCALL.
 
 PTRACE_TRACEME is not used: the subject only allows PTRACE_SYSCALL, PTRACE_GETREGSET, PTRACE_SETOPTIONS, PTRACE_GETSIGINFO, PTRACE_SEIZE, PTRACE_INTERRUPT and PTRACE_LISTEN.
 
@@ -224,11 +224,11 @@ Maintains two static syscall tables, one for x86_64 (`syscalls_64.c`) and one fo
 
 ### Register Reading Strategy
 
-Uses PTRACE_GETREGSET with `NT_PRSTATUS` to read the entire register set, detects the architecture from the CS segment register (`0x33` = 64-bit, `0x23` = 32-bit), extracts syscall number from orig_rax (or orig_eax on i386) register, reads arguments from standard argument registers, captures return value from rax/eax.
+Uses PTRACE_GETREGSET with `NT_PRSTATUS` to read the entire register set, detects the architecture from the register set size returned by the kernel in `iov_len` (216 bytes = x86_64, 68 bytes = i386), extracts syscall number from orig_rax (or orig_eax on i386) register, reads arguments from standard argument registers, captures return value from rax/eax.
 
 ### String Reconstruction
 
-Reads the traced process memory through `/proc/<pid>/mem` (`lseek` + `read`), assembles characters into strings, handles null terminators and invalid memory gracefully, truncates at reasonable length (32-64 chars).
+Reads the traced process memory through `/proc/<pid>/mem` (`pread`), since memory-read requests are not in the allowed ptrace list. Paths are printed in full, other strings and buffers are truncated at 32 bytes like strace's default, with strace-style escaping. Buffers filled by the kernel (`read`, `fstat`, `statx`...) are printed at syscall exit. Unreadable addresses fall back to the raw pointer.
 
 ### State Machine Design
 
