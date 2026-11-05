@@ -83,6 +83,7 @@ int trace_loop(t_tracer *tracer)
 		if (WIFSTOPPED(status)) {
 			int sig = WSTOPSIG(status);
 
+			// In or Out of syscall: le kernel met SIGTRAP | 0x80, pas de signal à livrer
 			if (sig == (SIGTRAP | 0x80)) {
 				iov.iov_len = sizeof(tracer->regs);
 				if (ptrace(PTRACE_GETREGSET, tracer->child_pid,
