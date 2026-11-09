@@ -404,8 +404,15 @@ static void print_mode(unsigned int mode)
 		{S_IFSOCK, "S_IFSOCK"},
 	};
 
+	// Bits spéciaux nommés (S_ISUID, S_ISGID, S_ISVTX), droits en octal, comme strace
 	print_enum(mode & S_IFMT, types, ARRAY_LEN(types));
-	out("|%#o", mode & 07777);
+	if (mode & S_ISUID)
+		out("|S_ISUID");
+	if (mode & S_ISGID)
+		out("|S_ISGID");
+	if (mode & S_ISVTX)
+		out("|S_ISVTX");
+	out("|%#o", mode & 0777);
 }
 
 // struct stat (64 bit uniquement: le layout 32 bit est différent)
@@ -443,6 +450,13 @@ static void print_statx_mask(unsigned long long mask)
 // struct statx: même layout en 32 et 64 bit (lecture par offsets, cf. linux/stat.h)
 static void print_statx(pid_t pid, unsigned long long addr)
 {
+	static const t_flag attrs[] = {
+		{0x4, "STATX_ATTR_COMPRESSED"}, {0x10, "STATX_ATTR_IMMUTABLE"},
+		{0x20, "STATX_ATTR_APPEND"}, {0x40, "STATX_ATTR_NODUMP"},
+		{0x800, "STATX_ATTR_ENCRYPTED"}, {0x1000, "STATX_ATTR_AUTOMOUNT"},
+		{0x2000, "STATX_ATTR_MOUNT_ROOT"}, {0x100000, "STATX_ATTR_VERITY"},
+		{0x200000, "STATX_ATTR_DAX"},
+	};
 	unsigned char b[48];
 	unsigned int mask;
 	unsigned long long attributes;
@@ -459,7 +473,9 @@ static void print_statx(pid_t pid, unsigned long long addr)
 	memcpy(&size, b + 40, sizeof(size));
 	out("{stx_mask=");
 	print_statx_mask(mask);
-	out(", stx_attributes=%#llx, stx_mode=", attributes);
+	out(", stx_attributes=");
+	FLAGS(attributes, attrs, "0");
+	out(", stx_mode=");
 	print_mode(mode);
 	out(", stx_size=%llu, ...}", size);
 }
@@ -587,6 +603,335 @@ static const t_flag g_af[] = {
 	{AF_INET6, "AF_INET6"}, {AF_NETLINK, "AF_NETLINK"}, {AF_PACKET, "AF_PACKET"},
 };
 
+// Mode de access(): F_OK (0) ou combinaison R_OK|W_OK|X_OK
+static void print_access_mode(unsigned long long mode)
+{
+	static const t_flag fl[] = {{4, "R_OK"}, {2, "W_OK"}, {1, "X_OK"}};
+
+	if (mode == 0)
+		out("F_OK");
+	else
+		FLAGS(mode, fl, "0");
+}
+
+/* ************************************************************************** */
+/*                        SIGNAUX: MASQUES ET SIGACTION                       */
+/* ************************************************************************** */
+
+// Nom court dans un masque, comme strace: INT, CHLD, RTMIN (32), RT_n (32 + n)
+static void print_sig_short(int sig)
+{
+	if (sig == 32)
+		out("RTMIN");
+	else if (sig > 32)
+		out("RT_%d", sig - 32);
+	else
+		out("%s", signal_name(sig) + 3);  // saute le "SIG"
+}
+
+// sigset_t du kernel: 1 bit par signal, bit 0 = signal 1.
+// Au-delà de 2/3 des bits à 1, strace affiche l'inverse (~[...]), plus court
+static void print_sigset_val(uint64_t mask, int nbits)
+{
+	int first = 1;
+
+	if (__builtin_popcountll(mask) >= nbits * 2 / 3) {
+		out("~");
+		mask = ~mask;
+		if (nbits < 64)
+			mask &= (1ULL << nbits) - 1;
+	}
+	out("[");
+	for (int i = 0; i < nbits; i++) {
+		if (mask & (1ULL << i)) {
+			out("%s", first ? "" : " ");
+			print_sig_short(i + 1);
+			first = 0;
+		}
+	}
+	out("]");
+}
+
+// Le masque vit dans la mémoire du tracee: on le lit, sinon adresse brute
+static void print_sigset(pid_t pid, unsigned long long addr, unsigned long long size)
+{
+	uint64_t mask = 0;
+
+	if (!addr) {
+		out("NULL");
+		return;
+	}
+	if (size == 0 || size > sizeof(mask)
+		|| read_mem(pid, addr, &mask, (size_t)size) != (ssize_t)size) {
+		print_ptr(addr);
+		return;
+	}
+	print_sigset_val(mask, (int)size * 8);
+}
+
+// Valeurs du kernel (asm/signal.h), même ordre d'affichage que strace
+static const t_flag g_sa_flags[] = {
+	{0x04000000, "SA_RESTORER"}, {0x08000000, "SA_ONSTACK"},
+	{0x10000000, "SA_RESTART"}, {0x40000000, "SA_NODEFER"},
+	{0x80000000, "SA_RESETHAND"}, {0x00000004, "SA_SIGINFO"},
+	{0x00000001, "SA_NOCLDSTOP"}, {0x00000002, "SA_NOCLDWAIT"},
+};
+
+// struct sigaction du KERNEL, pas celle de la libc: handler, flags, restorer, mask
+// x86_64: 3 champs de 8 octets ; i386: 3 champs de 4 octets ; mask: 8 octets
+static void print_sigaction(pid_t pid, unsigned long long addr, int is_64)
+{
+	unsigned char buf[32];
+	size_t word = is_64 ? 8 : 4;
+	size_t len = 3 * word + sizeof(uint64_t);
+	unsigned long long handler = 0, flags = 0, restorer = 0;
+	uint64_t mask;
+
+	if (!addr) {
+		out("NULL");
+		return;
+	}
+	if (read_mem(pid, addr, buf, len) != (ssize_t)len) {
+		print_ptr(addr);
+		return;
+	}
+	// x86 est little-endian: copier 4 octets dans un 8 octets à zéro est correct
+	memcpy(&handler, buf, word);
+	memcpy(&flags, buf + word, word);
+	memcpy(&restorer, buf + 2 * word, word);
+	memcpy(&mask, buf + 3 * word, sizeof(mask));
+
+	out("{sa_handler=");
+	if (handler == 0)
+		out("SIG_DFL");
+	else if (handler == 1)
+		out("SIG_IGN");
+	else
+		out("%#llx", handler);
+	out(", sa_mask=");
+	print_sigset_val(mask, 64);
+	out(", sa_flags=");
+	FLAGS(flags, g_sa_flags, "0");
+	if (flags & 0x04000000)
+		out(", sa_restorer=%#llx", restorer);
+	out("}");
+}
+
+/* ************************************************************************** */
+/*                                   IOCTL                                    */
+/* ************************************************************************** */
+
+static const t_flag g_ioctl_req[] = {
+	{0x5401, "TCGETS"}, {0x5402, "TCSETS"}, {0x5403, "TCSETSW"},
+	{0x5404, "TCSETSF"}, {0x5409, "TCSBRK"}, {0x540A, "TCXONC"},
+	{0x540B, "TCFLSH"}, {0x540E, "TIOCSCTTY"}, {0x540F, "TIOCGPGRP"},
+	{0x5410, "TIOCSPGRP"}, {0x5411, "TIOCOUTQ"}, {0x5413, "TIOCGWINSZ"},
+	{0x5414, "TIOCSWINSZ"}, {0x541B, "FIONREAD"}, {0x5421, "FIONBIO"},
+	{0x5422, "TIOCNOTTY"}, {0x5429, "TIOCGSID"}, {0x5450, "FIONCLEX"},
+	{0x5451, "FIOCLEX"}, {0x80045430, "TIOCGPTN"}, {0x40045431, "TIOCSPTLCK"},
+};
+
+// Requête connue par son nom, sinon décomposée comme strace:
+// direction (bits 30-31), type (8-15), numéro (0-7), taille de l'argument (16-29)
+static void print_ioctl_request(unsigned int req)
+{
+	static const char *dir[] = {
+		"_IOC_NONE", "_IOC_WRITE", "_IOC_READ", "_IOC_READ|_IOC_WRITE",
+	};
+
+	for (size_t i = 0; i < ARRAY_LEN(g_ioctl_req); i++) {
+		if (g_ioctl_req[i].val == req) {
+			out("%s", g_ioctl_req[i].name);
+			return;
+		}
+	}
+	out("_IOC(%s, %#x, %#x, %#x)", dir[req >> 30], (req >> 8) & 0xff,
+		req & 0xff, (req >> 16) & 0x3fff);
+}
+
+// c_oflag: 6 champs de délai (NL0, CR0...) toujours affichés, puis les bits
+static void print_termios_oflag(unsigned int v)
+{
+	static const char *nl[] = {"NL0", "NL1"};
+	static const char *cr[] = {"CR0", "CR1", "CR2", "CR3"};
+	static const char *tab[] = {"TAB0", "TAB1", "TAB2", "TAB3"};
+	static const char *bs[] = {"BS0", "BS1"};
+	static const char *vt[] = {"VT0", "VT1"};
+	static const char *ff[] = {"FF0", "FF1"};
+	static const t_flag fl[] = {
+		{0x01, "OPOST"}, {0x02, "OLCUC"}, {0x04, "ONLCR"}, {0x08, "OCRNL"},
+		{0x10, "ONOCR"}, {0x20, "ONLRET"}, {0x40, "OFILL"}, {0x80, "OFDEL"},
+	};
+
+	out("%s|%s|%s|%s|%s|%s", nl[(v >> 8) & 1], cr[(v >> 9) & 3],
+		tab[(v >> 11) & 3], bs[(v >> 13) & 1], vt[(v >> 14) & 1], ff[(v >> 15) & 1]);
+	v &= ~0xff00u;
+	if (v) {
+		out("|");
+		FLAGS(v, fl, "");
+	}
+}
+
+// c_cflag: vitesse (champ CBAUD), taille de caractère (CSIZE), puis les bits
+static void print_termios_cflag(unsigned int v)
+{
+	static const char *low[] = {
+		"B0", "B50", "B75", "B110", "B134", "B150", "B200", "B300", "B600",
+		"B1200", "B1800", "B2400", "B4800", "B9600", "B19200", "B38400",
+	};
+	static const char *high[] = {
+		"BOTHER", "B57600", "B115200", "B230400", "B460800", "B500000",
+		"B576000", "B921600", "B1000000", "B1152000", "B1500000", "B2000000",
+		"B2500000", "B3000000", "B3500000", "B4000000",
+	};
+	static const t_flag fl[] = {
+		{0x40, "CSTOPB"}, {0x80, "CREAD"}, {0x100, "PARENB"}, {0x200, "PARODD"},
+		{0x400, "HUPCL"}, {0x800, "CLOCAL"}, {0x40000000, "CMSPAR"},
+		{0x80000000, "CRTSCTS"},
+	};
+
+	out("%s|CS%u", (v & 0x1000) ? high[v & 0xf] : low[v & 0xf], 5 + ((v >> 4) & 3));
+	v &= ~0x103fu;
+	if (v) {
+		out("|");
+		FLAGS(v, fl, "");
+	}
+}
+
+// struct termios du kernel: 4 x u32 (iflag, oflag, cflag, lflag), puis c_line et c_cc
+// strace n'affiche que les 4 flags suivis de "..."
+static void print_termios(pid_t pid, unsigned long long addr)
+{
+	static const t_flag iflag[] = {
+		{0x1, "IGNBRK"}, {0x2, "BRKINT"}, {0x4, "IGNPAR"}, {0x8, "PARMRK"},
+		{0x10, "INPCK"}, {0x20, "ISTRIP"}, {0x40, "INLCR"}, {0x80, "IGNCR"},
+		{0x100, "ICRNL"}, {0x200, "IUCLC"}, {0x400, "IXON"}, {0x800, "IXANY"},
+		{0x1000, "IXOFF"}, {0x2000, "IMAXBEL"}, {0x4000, "IUTF8"},
+	};
+	static const t_flag lflag[] = {
+		{0x1, "ISIG"}, {0x2, "ICANON"}, {0x4, "XCASE"}, {0x8, "ECHO"},
+		{0x10, "ECHOE"}, {0x20, "ECHOK"}, {0x40, "ECHONL"}, {0x80, "NOFLSH"},
+		{0x8000, "IEXTEN"}, {0x200, "ECHOCTL"}, {0x400, "ECHOPRT"},
+		{0x800, "ECHOKE"}, {0x1000, "FLUSHO"}, {0x4000, "PENDIN"},
+		{0x100, "TOSTOP"}, {0x10000, "EXTPROC"},
+	};
+	unsigned int f[4];
+
+	if (read_mem(pid, addr, f, sizeof(f)) != (ssize_t)sizeof(f)) {
+		print_ptr(addr);
+		return;
+	}
+	out("{c_iflag=");
+	FLAGS(f[0], iflag, "0");
+	out(", c_oflag=");
+	print_termios_oflag(f[1]);
+	out(", c_cflag=");
+	print_termios_cflag(f[2]);
+	out(", c_lflag=");
+	FLAGS(f[3], lflag, "0");
+	out(", ...}");
+}
+
+// struct winsize: 4 x unsigned short
+static void print_winsize(pid_t pid, unsigned long long addr)
+{
+	unsigned short ws[4];
+
+	if (read_mem(pid, addr, ws, sizeof(ws)) != (ssize_t)sizeof(ws)) {
+		print_ptr(addr);
+		return;
+	}
+	out("{ws_row=%hu, ws_col=%hu, ws_xpixel=%hu, ws_ypixel=%hu}", ws[0], ws[1], ws[2], ws[3]);
+}
+
+// Entier pointé (pid, compteur): [42]
+static void print_int_ptr(pid_t pid, unsigned long long addr)
+{
+	int v;
+
+	if (read_mem(pid, addr, &v, sizeof(v)) != (ssize_t)sizeof(v))
+		print_ptr(addr);
+	else
+		out("[%d]", v);
+}
+
+// 3e argument d'ioctl, à la sortie du syscall.
+// Requêtes "get": le kernel remplit la struct, décodée seulement en cas de succès.
+// Requêtes "set": la struct vient du programme, toujours décodée
+static void print_ioctl_arg(pid_t pid, unsigned int req, unsigned long long arg, int failed)
+{
+	switch (req) {
+		case 0x5401:  // TCGETS
+			if (failed)
+				print_ptr(arg);
+			else
+				print_termios(pid, arg);
+			return;
+		case 0x5402:  // TCSETS
+		case 0x5403:  // TCSETSW
+		case 0x5404:  // TCSETSF
+			print_termios(pid, arg);
+			return;
+		case 0x5413:  // TIOCGWINSZ
+			if (failed)
+				print_ptr(arg);
+			else
+				print_winsize(pid, arg);
+			return;
+		case 0x5414:  // TIOCSWINSZ
+			print_winsize(pid, arg);
+			return;
+		case 0x540F:  // TIOCGPGRP
+		case 0x541B:  // FIONREAD
+		case 0x5429:  // TIOCGSID
+		case 0x5411:  // TIOCOUTQ
+		case 0x80045430: // TIOCGPTN
+			if (failed)
+				print_ptr(arg);
+			else
+				print_int_ptr(pid, arg);
+			return;
+		case 0x5410:  // TIOCSPGRP
+		case 0x5421:  // FIONBIO
+		case 0x40045431: // TIOCSPTLCK
+			print_int_ptr(pid, arg);
+			return;
+		default:      // Argument inconnu: valeur brute
+			out("%#llx", arg);
+			return;
+	}
+}
+
+/* ************************************************************************** */
+/*                                   CLONE                                    */
+/* ************************************************************************** */
+
+// Octet bas = signal envoyé au parent à la mort de l'enfant (SIGCHLD pour fork)
+static void print_clone_flags(unsigned long long v)
+{
+	static const t_flag fl[] = {
+		{0x100, "CLONE_VM"}, {0x200, "CLONE_FS"}, {0x400, "CLONE_FILES"},
+		{0x800, "CLONE_SIGHAND"}, {0x1000, "CLONE_PIDFD"}, {0x2000, "CLONE_PTRACE"},
+		{0x4000, "CLONE_VFORK"}, {0x8000, "CLONE_PARENT"}, {0x10000, "CLONE_THREAD"},
+		{0x20000, "CLONE_NEWNS"}, {0x40000, "CLONE_SYSVSEM"}, {0x80000, "CLONE_SETTLS"},
+		{0x100000, "CLONE_PARENT_SETTID"}, {0x200000, "CLONE_CHILD_CLEARTID"},
+		{0x400000, "CLONE_DETACHED"}, {0x800000, "CLONE_UNTRACED"},
+		{0x1000000, "CLONE_CHILD_SETTID"}, {0x2000000, "CLONE_NEWCGROUP"},
+		{0x4000000, "CLONE_NEWUTS"}, {0x8000000, "CLONE_NEWIPC"},
+		{0x10000000, "CLONE_NEWUSER"}, {0x20000000, "CLONE_NEWPID"},
+		{0x40000000, "CLONE_NEWNET"}, {0x80000000, "CLONE_IO"},
+	};
+	unsigned long long named = v & ~0xffULL;
+	int sig = (int)(v & 0xff);
+
+	if (named)
+		FLAGS(named, fl, "");
+	if (sig)
+		out("%s%s", named ? "|" : "", signal_name(sig));
+	if (!named && !sig)
+		out("0");
+}
+
 /* ************************************************************************** */
 /*                          IDENTIFIANT CANONIQUE                             */
 /* ************************************************************************** */
@@ -597,7 +942,7 @@ static long canonical_number(long num, int is_64)
 {
 	static const short map32[][2] = {
 		{3, 0}, {4, 1}, {5, 2}, {6, 3}, {197, 5}, {19, 8}, {192, 9},
-		{125, 10}, {91, 11}, {45, 12}, {174, 13}, {175, 14}, {54, 16},
+		{125, 10}, {91, 11}, {45, 12}, {120, 56}, {305, 267}, {122, 63}, {42, 22}, {331, 293}, {307, 269}, {439, 439}, {174, 13}, {175, 14}, {54, 16},
 		{180, 17}, {181, 18}, {33, 21}, {163, 25}, {41, 32}, {63, 33},
 		{162, 35}, {359, 41}, {362, 42}, {361, 49}, {11, 59}, {1, 60},
 		{114, 61}, {37, 62}, {55, 72}, {221, 72}, {183, 79}, {85, 89},
@@ -620,8 +965,9 @@ static long canonical_number(long num, int is_64)
 // on l'affiche à la sortie, comme strace (read(3, "\177ELF"..., 832))
 static int is_deferred(long id)
 {
-	return id == 0 || id == 5 || id == 17 || id == 61 || id == 79 || id == 97
-		|| id == 194 || id == 195
+	return id == 0 || id == 5 || id == 13 || id == 14 || id == 16 || id == 17
+		|| id == 56 || id == 61 || id == 63 || id == 79 || id == 89 || id == 97
+		|| id == 194 || id == 195 || id == 267 || id == 22 || id == 293
 		|| id == 217 || id == 262 || id == 302 || id == 318 || id == 332;
 }
 
@@ -715,59 +1061,67 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 			print_ptr(a[0]);
 			return;
 
-		case 13:  // rt_sigaction(sig, act, oldact, sigsetsize)
+		case 13:  // rt_sigaction(sig, act, oldact, sigsetsize): oldact à la sortie
 			out("%s, ", signal_name((int)a[0]));
-			print_ptr(a[1]);
+			print_sigaction(pid, a[1], is_64);
 			out(", ");
-			print_ptr(a[2]);
-			out(", %llu", a[3]);
 			return;
 
-		case 14: { // rt_sigprocmask(how, set, oldset, sigsetsize)
+		case 14: { // rt_sigprocmask(how, set, oldset, sigsetsize): oldset à la sortie
 			static const t_flag how[] = {
 				{0, "SIG_BLOCK"}, {1, "SIG_UNBLOCK"}, {2, "SIG_SETMASK"},
 			};
-			print_enum((long long)a[0], how, ARRAY_LEN(how));
+			if (a[0] <= 2)
+				print_enum((long long)a[0], how, ARRAY_LEN(how));
+			else
+				out("%#llx /* SIG_??? */", a[0]);
 			out(", ");
-			print_ptr(a[1]);
+			print_sigset(pid, a[1], a[3]);
 			out(", ");
-			print_ptr(a[2]);
-			out(", %llu", a[3]);
 			return;
 		}
 
-		case 16: { // ioctl(fd, request, arg)
-			static const t_flag req[] = {
-				{0x5401, "TCGETS"}, {0x5402, "TCSETS"}, {0x5403, "TCSETSW"},
-				{0x540F, "TIOCGPGRP"}, {0x5410, "TIOCSPGRP"}, {0x5413, "TIOCGWINSZ"},
-				{0x5414, "TIOCSWINSZ"}, {0x541B, "FIONREAD"}, {0x5421, "FIONBIO"},
-			};
-			int found = 0;
-
+		case 16:  // ioctl(fd, request, arg): arg à la sortie (rempli par le kernel)
 			print_fd(a[0]);
 			out(", ");
-			for (size_t i = 0; i < ARRAY_LEN(req); i++) {
-				if (req[i].val == (a[1] & 0xffffffff)) {
-					out("%s", req[i].name);
-					found = 1;
-				}
-			}
-			if (!found)
-				out("%#llx", a[1]);
+			print_ioctl_request((unsigned int)a[1]);
 			out(", ");
-			print_ptr(a[2]);
 			return;
-		}
+
+		case 56:  // clone: parent_tid, child_tidptr et tls à la sortie
+			out("child_stack=");
+			print_ptr(a[1]);
+			out(", flags=");
+			print_clone_flags(a[0]);
+			return;
 
 		case 21:  // access(path, mode)
 			print_path(pid, a[0]);
 			out(", ");
-			if (a[1] == 0) {
-				out("F_OK");
-			} else {
-				static const t_flag fl[] = {{4, "R_OK"}, {2, "W_OK"}, {1, "X_OK"}};
-				FLAGS(a[1], fl, "0");
+			print_access_mode(a[1]);
+			return;
+
+		case 269: // faccessat(dirfd, path, mode)
+		case 439: { // faccessat2(dirfd, path, mode, flags)
+			// AT_EACCESS vaut 0x200 comme AT_REMOVEDIR: le sens dépend du syscall
+			static const t_flag fl[] = {
+				{0x100, "AT_SYMLINK_NOFOLLOW"}, {0x200, "AT_EACCESS"},
+				{0x1000, "AT_EMPTY_PATH"},
+			};
+			print_dirfd(a[0]);
+			out(", ");
+			print_path(pid, a[1]);
+			out(", ");
+			print_access_mode(a[2]);
+			if (id == 439) {
+				out(", ");
+				FLAGS(a[3], fl, "0");
 			}
+			return;
+		}
+
+		case 22:  // pipe(fds): le kernel remplit fds, affiché à la sortie
+		case 293: // pipe2(fds, flags)
 			return;
 
 		case 35:  // nanosleep(req, rem)
@@ -861,11 +1215,19 @@ static void print_syscall_args(t_syscall_info *info, pid_t pid)
 		case 79:  // getcwd(buf, size): buf à la sortie
 			return;
 
-		case 89:  // readlink(path, buf, size)
+		case 89:  // readlink(path, buf, size): buf à la sortie
 			print_path(pid, a[0]);
 			out(", ");
-			print_ptr(a[1]);
-			out(", %llu", a[2]);
+			return;
+
+		case 267: // readlinkat(dirfd, path, buf, size): buf à la sortie
+			print_dirfd(a[0]);
+			out(", ");
+			print_path(pid, a[1]);
+			out(", ");
+			return;
+
+		case 63:  // uname(buf): rempli par le kernel, affiché à la sortie
 			return;
 
 		case 137: // statfs(path, buf)
@@ -1146,6 +1508,91 @@ static void print_deferred_args(t_syscall_info *info, pid_t pid)
 				print_rlimit(pid, a[3], 8, "RLIM64_INFINITY");
 			return;
 
+		case 13:  // rt_sigaction: oldact rempli par le kernel
+			if (failed)
+				print_ptr(a[2]);
+			else
+				print_sigaction(pid, a[2], is_64);
+			out(", %llu", a[3]);
+			return;
+
+		case 14:  // rt_sigprocmask: oldset rempli par le kernel
+			if (failed)
+				print_ptr(a[2]);
+			else
+				print_sigset(pid, a[2], a[3]);
+			out(", %llu", a[3]);
+			return;
+
+		case 16:  // ioctl
+			print_ioctl_arg(pid, (unsigned int)a[1], a[2], failed);
+			return;
+
+		case 56: { // clone(flags, stack, parent_tid, child_tid, tls), i386: tls avant child_tid
+			unsigned long long ctid = is_64 ? a[3] : a[4];
+			unsigned long long tls = is_64 ? a[4] : a[3];
+
+			// parent_tid: le kernel y écrit le tid de l'enfant (ou le pidfd)
+			if (a[0] & (0x100000 | 0x1000)) {
+				out(", parent_tid=");
+				if (failed)
+					print_ptr(a[2]);
+				else
+					print_int_ptr(pid, a[2]);
+			}
+			if (a[0] & (0x1000000 | 0x200000)) {
+				out(", child_tidptr=");
+				print_ptr(ctid);
+			}
+			if (a[0] & 0x80000)
+				out(", tls=%#llx", tls);
+			return;
+		}
+
+		case 63: { // uname: struct utsname = 6 chaînes de 65 octets, strace en montre 2
+			char uts[2][65];
+
+			if (failed || read_mem(pid, a[0], uts, sizeof(uts)) != (ssize_t)sizeof(uts)) {
+				print_ptr(a[0]);
+				return;
+			}
+			uts[0][64] = '\0';
+			uts[1][64] = '\0';
+			out("{sysname=\"%s\", nodename=\"%s\", ...}", uts[0], uts[1]);
+			return;
+		}
+
+		case 89:  // readlink: buf non terminé par '\0', ret = longueur écrite
+		case 267: { // readlinkat
+			unsigned long long buf = id == 89 ? a[1] : a[2];
+			unsigned long long size = id == 89 ? a[2] : a[3];
+
+			if (failed)
+				print_ptr(buf);
+			else
+				print_buffer(pid, buf, (unsigned long long)ret, 0);
+			out(", %llu", size);
+			return;
+		}
+
+		case 22:  // pipe
+		case 293: { // pipe2
+			static const t_flag fl[] = {
+				{0x800, "O_NONBLOCK"}, {0x80000, "O_CLOEXEC"}, {0x4000, "O_DIRECT"},
+			};
+			int fds[2];
+
+			if (failed || read_mem(pid, a[0], fds, sizeof(fds)) != (ssize_t)sizeof(fds))
+				print_ptr(a[0]);
+			else
+				out("[%d, %d]", fds[0], fds[1]);
+			if (id == 293) {
+				out(", ");
+				FLAGS(a[1], fl, "0");
+			}
+			return;
+		}
+
 		case 194: // listxattr
 		case 195: // llistxattr
 			if (failed)
@@ -1269,6 +1716,18 @@ void print_syscall_exit(t_syscall_info *info, pid_t pid)
 			out("-1 %s (%s)\n", name, strerror(err));
 		else
 			out("-1 ERRNO_%d (%s)\n", err, strerror(err));
+		return;
+	}
+
+	// fcntl F_GETFD / F_GETFL: le retour est un jeu de flags, décodé comme strace
+	if (id == 72 && info->args[1] == 1 && ret != 0) {
+		out("%#llx (flags %s)\n", ret, ret == 1 ? "FD_CLOEXEC" : "?");
+		return;
+	}
+	if (id == 72 && info->args[1] == 3) {
+		out("%#llx (flags ", ret);
+		print_open_flags((unsigned long long)ret);
+		out(")\n");
 		return;
 	}
 
