@@ -57,19 +57,15 @@ fclean: clean tclean
 re: fclean all
 
 #******************************************************************************
-# TESTS: chaque tests/<nom>.c donne tests/<nom>_64 et tests/<nom>_32 *
+# TESTS *
 #******************************************************************************
 TEST_SRC = $(wildcard tests/*.c)
-TEST_BIN = $(TEST_SRC:.c=_64) $(TEST_SRC:.c=_32)
+TEST_BIN = $(TEST_SRC:.c=)
 
 test: $(NAME) $(TEST_BIN)
 
-tests/%_64: tests/%.c
+tests/%: tests/%.c
 	@$(CC) $< -o $@
-	@echo "$(BLEU)Compiling $< to $@.$(RESET)"
-
-tests/%_32: tests/%.c
-	@$(CC) -m32 $< -o $@
 	@echo "$(BLEU)Compiling $< to $@.$(RESET)"
 
 tclean:

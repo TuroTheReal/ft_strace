@@ -1,8 +1,8 @@
 # Build
 ft_strace
 obj_n_dep/
-tests/*_64
-tests/*_32
+tests/*
+!tests/*.c
 
 # Config éditeur locale (chemins absolus, propre à chaque machine)
 .vscode/
