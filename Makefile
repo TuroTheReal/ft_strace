@@ -11,7 +11,7 @@ HEADER_FOLD = header/
 OBJ_DEP_DIR = obj_n_dep/
 
 HEADER_SRC = ft_strace
-C_SRC = main stats print syscall_info syscalls_32 syscalls_64 syscall_args tracer path
+C_SRC = main stats print syscall_info syscalls_32 syscalls_64 syscall_args tracer path signals
 
 HEADER_FLS = $(addsuffix .h, $(HEADER_SRC))
 HEADER = $(addprefix $(HEADER_FOLD), $(HEADER_FLS))

@@ -73,6 +73,9 @@ typedef struct s_tracer {
 // Une ligne de trace est en cours (entrée affichée, pas encore la sortie)
 extern volatile sig_atomic_t g_line_open;
 
+// État à nettoyer si un signal arrête ft_strace (défini dans signals.c)
+extern t_cleanup g_cleanup;
+
 // Prototypes
 int			start_trace(char **argv, char **envp, int option_c);
 int			trace_loop(t_tracer *tracer);
@@ -91,5 +94,8 @@ void		update_stats(t_tracer *tracer, t_syscall_info *info);
 void		print_stats(t_tracer *tracer);
 void		free_stats(t_tracer *tracer);
 char		*find_in_path(const char *cmd);
+void		setup_signals(void);
+void		restore_signals(void);
+pid_t		wait_unblocked(pid_t pid, int *status);
 
 #endif

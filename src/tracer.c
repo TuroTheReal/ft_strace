@@ -1,26 +1,5 @@
 #include "ft_strace.h"
 
-static t_cleanup g_cleanup = {-1, -1, NULL};
-
-// Uniquement des fonctions async-signal-safe (write, close, kill, _exit).
-// Le détachement ne fait pas partie des requêtes autorisées: on ne peut pas
-// relâcher le tracee comme strace, on le tue.
-static void signal_handler(int sig)
-{
-	static const char unfinished[] = " <unfinished ...>\n";
-
-	if (g_line_open) {
-		// Rien à faire si l'écriture échoue: on quitte de toute façon
-		ssize_t ret = write(STDERR_FILENO, unfinished, sizeof(unfinished) - 1);
-		(void)ret;
-	}
-	if (g_cleanup.pipe_fd != -1)
-		close(g_cleanup.pipe_fd);
-	if (g_cleanup.child_pid > 0)
-		kill(g_cleanup.child_pid, SIGKILL);
-	_exit(128 + sig);
-}
-
 void cleanup(char *str)
 {
 	if (str)
@@ -56,7 +35,7 @@ int trace_loop(t_tracer *tracer)
 		sig_to_inject = 0;
 		listening = 0;
 
-		if (waitpid(tracer->child_pid, &status, 0) == -1) {
+		if (wait_unblocked(tracer->child_pid, &status) == -1) {
 			perror("waitpid");
 			break;
 		}
@@ -248,10 +227,7 @@ int start_trace(char **argv, char **envp, int option_c)
 	g_cleanup.pipe_fd = pipefd[1];
 	g_cleanup.path_resolved = path_resolved;
 
-	signal(SIGINT, signal_handler);
-	signal(SIGTERM, signal_handler);
-	signal(SIGHUP, signal_handler);
-	signal(SIGQUIT, signal_handler);
+	setup_signals();
 
 	// L'enfant est bloqué sur read() du pipe tant qu'on n'écrit pas:
 	// il ne peut pas faire execve avant d'être tracé, sans aucune hypothèse de timing
@@ -277,7 +253,7 @@ int start_trace(char **argv, char **envp, int option_c)
 	}
 
 	// Attendre l'interruption
-	if (waitpid(tracer.child_pid, &status, 0) == -1) {
+	if (wait_unblocked(tracer.child_pid, &status) == -1) {
 		perror("waitpid interrupt");
 		close(pipefd[1]);
 		kill(tracer.child_pid, SIGKILL);
@@ -302,10 +278,7 @@ int start_trace(char **argv, char **envp, int option_c)
 
 	g_cleanup.child_pid = -1;
 	g_cleanup.path_resolved = NULL;
-	signal(SIGINT, SIG_DFL);
-	signal(SIGTERM, SIG_DFL);
-	signal(SIGHUP, SIG_DFL);
-	signal(SIGQUIT, SIG_DFL);
+	restore_signals();
 
 	if (option_c) {
 		print_stats(&tracer);
