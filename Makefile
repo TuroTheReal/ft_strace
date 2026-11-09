@@ -50,15 +50,46 @@ clean:
 	@$(RM) $(OBJ_DEP_DIR)
 	@echo "$(VIOLET)Suppressing objects & dependencies files of $(NAME).$(RESET)"
 
-fclean: clean
+fclean: clean tclean
 	@$(RM) $(NAME)
 	@echo "$(VERT)Suppressing archives $(NAME).$(RESET)"
 
 re: fclean all
 
+#******************************************************************************
+# TESTS: chaque tests/*.c compilé en 64 bit (_64) et en 32 bit (_32) *
+# Autre dossier: make test TEST_DIR=chemin/ *
+#******************************************************************************
+TEST_DIR ?= tests/
+TEST_SRC = $(wildcard $(TEST_DIR)*.c)
+TEST_BIN = $(TEST_SRC:.c=_64) $(TEST_SRC:.c=_32)
+# -w: les sources de test ne sont pas les nôtres, pas de -Werror dessus
+TEST_FLAGS = -g -w -pthread
+
+test: $(NAME) $(TEST_BIN)
+	@if [ -z "$(TEST_SRC)" ]; then \
+		echo "$(VIOLET)Aucun .c dans $(TEST_DIR): y copier les sources de test.$(RESET)"; \
+	else \
+		echo "$(ROSE)TESTS COMPILÉS: ./$(NAME) $(TEST_DIR)<nom>_64 ou _32$(RESET)"; \
+	fi
+
+# Un test qui ne compile pas n'arrête pas les autres (ex: 32 bit sans gcc-multilib)
+$(TEST_DIR)%_64: $(TEST_DIR)%.c
+	@$(CC) $(TEST_FLAGS) $< -o $@ \
+		&& echo "$(BLEU)Compiling $< to $@.$(RESET)" \
+		|| echo "$(VIOLET)KO 64 bit: $<$(RESET)"
+
+$(TEST_DIR)%_32: $(TEST_DIR)%.c
+	@$(CC) -m32 $(TEST_FLAGS) $< -o $@ \
+		&& echo "$(BLEU)Compiling $< to $@ (32 bit).$(RESET)" \
+		|| echo "$(VIOLET)KO 32 bit: $< (gcc-multilib installé ?)$(RESET)"
+
+tclean:
+	@$(RM) $(TEST_BIN)
+
 -include $(DEP)
 
-.PHONY: re fclean clean all
+.PHONY: re fclean clean all test tclean
 
 #******************************************************************************
 # COLORS *
